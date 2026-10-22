@@ -298,6 +298,30 @@ uv run --extra locomotion python -m examples.locomotion.train \
   --robot go2 --num-envs 2048 --run
 ```
 
+### MicroDuck MuJoCo / SynReal training
+
+Select either physics backend for the shared MicroDuck flat-ground PPO task:
+
+```bash
+uv sync --extra locomotion --inexact --no-install-project
+source .venv/bin/activate
+python -m examples.microduck.train --solver mujoco --num-envs 64 --iterations 5
+python -m examples.microduck.train --solver synreal --num-envs 64 --iterations 5
+```
+
+Use `python -m examples.microduck.validate --solver synreal --viewer gl` for a visual pose-hold simulation.
+For the official walking policy, run `python -m examples.microduck.play --solver synreal --num-frames 3000`
+(or `--solver mujoco`). This reuses the original robot demo's model, controller, and CUDA graph.
+Pass `--checkpoint <model.pt>` instead to replay a policy trained by this shared PPO task.
+SynReal prompts for credentials. Both backends use the same position PD task;
+this baseline differs from the copied project's BAM sim2real recipe, which remains
+available through `python -m examples.microduck.mjlab_train` in its separate environment.
+See [MicroDuck instructions](examples/microduck/README.md) for configuration,
+validation, logs, and original mjlab training/export commands.
+For a concise Chinese quick start covering installation, training, graphical
+playback, keyboard control, and pretrained weights, see
+[MICRODUCK_GUIDE.md](MICRODUCK_GUIDE.md).
+
 ## Python API
 
 The Newton adapter uses a Newton model and state while the native SynReal solver owns the numerical solve:

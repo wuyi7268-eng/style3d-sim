@@ -214,6 +214,10 @@ tempCodeRunnerFile.py
 /logs/
 /runs/
 
+# Local MicroDuck validation artifacts and viewer layout.
+/.validation/
+/imgui.ini
+
 # Local G1 USD package; see examples/locomotion_g1/ASSET.md
 /examples/locomotion_g1/assets/unitree_g1_29dof/
 

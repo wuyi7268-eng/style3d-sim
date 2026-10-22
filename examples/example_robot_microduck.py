@@ -2,20 +2,37 @@
 
 python examples/example_robot_microduck.py --solver synreal --policy walk
 python examples/example_robot_microduck.py --solver mujoco --policy walk
+
+SynReal prompts for credentials when not logged in. Add --force-login to replace another device's session.
 """
 
 from pathlib import Path
 
-import numpy as np
-import warp as wp
-
 import newton
 import newton.examples
+import numpy as np
+import warp as wp
 
 if __package__:
     from .microduck_assets import ASSET_DIR, MODEL_FILENAME, download_assets
 else:
     from microduck_assets import ASSET_DIR, MODEL_FILENAME, download_assets
+
+
+def _login_synreal(force_login=False):
+    import getpass
+
+    import style3d_sim as s3d
+
+    if s3d.is_logged_in():
+        return
+    account = getpass.getpass("Style3D account (hidden): ")
+    password = getpass.getpass("Style3D password (hidden): ")
+    try:
+        if not s3d.login(account, password, force_login):
+            raise RuntimeError("Style3D login failed; use --force-login to replace another device's session if needed")
+    finally:
+        del account, password
 
 
 class WalkPolicy:
@@ -78,10 +95,14 @@ class Example:
         self.sim_dt = self.frame_dt / self.sim_substeps
         self.sim_time = 0.0
         self.command = np.asarray(args.command, dtype=np.float32)
+        self.incremental_command = getattr(args, "incremental_command", False)
+        self._command_key_prev = {name: False for name in ("i", "k", "j", "l", "u", "o")}
         self._reset_key_prev = False
         self.graph = None
         if self.solver_type == "synreal" and not self.device.is_cuda:
             raise ValueError("SynReal requires CUDA; use --solver mujoco --device cpu for CPU simulation")
+        if self.solver_type == "synreal":
+            _login_synreal(args.force_login)
 
         asset_dir = Path(args.asset_dir)
         if not all((asset_dir / name).is_file() for name in ("microduck.urdf", MODEL_FILENAME, "policies/walk.onnx")):
@@ -100,7 +121,8 @@ class Example:
             str(asset_dir / "microduck.urdf"),
             xform=wp.transform(wp.vec3(0.0, 0.0, 0.12)),
             floating=True,
-            enable_self_collisions=False,
+            # Keep parent-child filtering, but allow other robot links to contact in SynReal.
+            enable_self_collisions=self.solver_type == "synreal",
             collapse_fixed_joints=True,
         )
         joint_ids = {name.rsplit("/", 1)[-1]: index for index, name in enumerate(builder.joint_label)}
@@ -195,7 +217,16 @@ class Example:
         command = self.command.copy()
         if hasattr(self.viewer, "is_key_down"):
             key = self.viewer.is_key_down
-            command += np.array([0.5 * (key("i") - key("k")), 0.2 * (key("j") - key("l")), 0.5 * (key("u") - key("o"))])
+            if self.incremental_command:
+                increments = {"i": (0, 0.1), "k": (0, -0.1), "j": (1, 0.1), "l": (1, -0.1), "u": (2, 0.1), "o": (2, -0.1)}
+                for name, (axis, amount) in increments.items():
+                    down = bool(key(name))
+                    if down and not self._command_key_prev[name]:
+                        self.command[axis] += amount
+                    self._command_key_prev[name] = down
+                command = self.command.copy()
+            else:
+                command += np.array([0.5 * (key("i") - key("k")), 0.2 * (key("j") - key("l")), 0.5 * (key("u") - key("o"))])
             reset_down = bool(key("p"))
             if reset_down and not self._reset_key_prev:
                 self.reset()
@@ -232,6 +263,7 @@ class Example:
         parser = newton.examples.create_parser()
         parser.set_defaults(num_frames=1000)
         parser.add_argument("--solver", choices=("synreal", "mujoco"), default="synreal")
+        parser.add_argument("--force-login", action="store_true", help="Replace another active Style3D session when logging in")
         parser.add_argument("--policy", choices=("walk",), default="walk")
         parser.add_argument("--asset-dir", type=Path, default=ASSET_DIR)
         parser.add_argument("--disable-cuda-graph", action="store_true", help="Run simulation steps without CUDA capture")

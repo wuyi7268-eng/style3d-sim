@@ -20,10 +20,10 @@ examples = [
     "scipy>=1.14",
     "torch>=2.7",
 ]
-# Go2/G1 PPO training, checkpoint export, and ONNX Runtime verification.
+# Go2/G1 and dual-backend MicroDuck PPO training, export, and ONNX verification.
 locomotion = [
     "ipywidgets>=8.0.4",
-    "newton[examples]>=1.5.0",
+    "newton[examples,sim]>=1.5.0",
     "onnx>=1.17",
     "onnxruntime>=1.20",
     "onnxscript>=0.4",
@@ -56,6 +56,7 @@ line-length = 100
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+testpaths = ["tests"]
 
 [[tool.uv.index]]
 name = "pytorch-cu132"
