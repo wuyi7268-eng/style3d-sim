@@ -78,6 +78,8 @@ def _contact_flags(
     body_q: wp.array[wp.transform],
     feet: wp.array2d[float],
     self_contact: wp.array2d[float],
+    robot_ground: wp.array2d[float],
+    head_ground: wp.array2d[float],
 ):
     i = wp.tid()
     if i >= count[0]:
@@ -101,43 +103,64 @@ def _contact_flags(
         return
     w0, w1 = shape_world[s0], shape_world[s1]
     r0, r1 = shape_role[s0], shape_role[s1]
-    if w0 >= 0 and r0 > 0 and r1 == -1:
-        wp.atomic_add(feet, w0, r0 - 1, 1.0)
-    if w1 >= 0 and r1 > 0 and r0 == -1:
-        wp.atomic_add(feet, w1, r1 - 1, 1.0)
-    # Role -2 excludes the separately articulated ball from the robot subtree.
-    if w0 >= 0 and w0 == w1 and r0 >= 0 and r1 >= 0:
+    if w0 >= 0 and r1 == -1 and r0 != -2:
+        wp.atomic_add(robot_ground, w0, 0, 1.0)
+        if r0 == -3:
+            wp.atomic_add(head_ground, w0, 0, 1.0)
+        if r0 == 1 or r0 == 2:
+            wp.atomic_add(feet, w0, r0 - 1, 1.0)
+    if w1 >= 0 and r0 == -1 and r1 != -2:
+        wp.atomic_add(robot_ground, w1, 0, 1.0)
+        if r1 == -3:
+            wp.atomic_add(head_ground, w1, 0, 1.0)
+        if r1 == 1 or r1 == 2:
+            wp.atomic_add(feet, w1, r1 - 1, 1.0)
+    # Role -2 excludes the separately articulated ball; -3 marks the head body.
+    if w0 >= 0 and w0 == w1 and r0 != -2 and r1 != -2 and r0 != -1 and r1 != -1:
         wp.atomic_add(self_contact, w0, 0, 1.0)
 
 
 class OfficialSensors:
     def __init__(self, env, robot):
         self.env = env
-        self.robot_body_count = env.task_logic.ball_body if env.task == "ballkick" else len(robot.body_mass)
+        self.robot_body_count = env.task_logic.ball_body if env.task.startswith("ballkick") else len(robot.body_mass)
         self.feet = ContactSensor(env.num_envs, 2, env.device)
         self.support = ContactSensor(env.num_envs, 1, env.device)
         self.self_contact = ContactSensor(env.num_envs, 1, env.device)
+        self.robot_ground = ContactSensor(env.num_envs, 1, env.device)
+        self.head_ground = ContactSensor(env.num_envs, 1, env.device)
         self.height = TerrainHeightSensor()
         self.feet_found = torch.zeros_like(self.feet.data.found)
         self.self_found = torch.zeros_like(self.self_contact.data.found)
         self._feet_wp = wp.from_torch(self.feet_found)
         self._self_wp = wp.from_torch(self.self_found)
+        body_labels = [label.rsplit("/", 1)[-1] for label in robot.body_label]
+        ankle_ids = {}
+        for side in ("left", "right"):
+            matches = [i for i, name in enumerate(body_labels) if name in (f"ankle_{side[0]}_v1", f"{side}_ankle")]
+            ankle_ids[side] = set(matches)
         roles = []
         for shape, label in enumerate(robot.shape_label):
             name = label.rsplit("/", 1)[-1]
             body = robot.shape_body[shape]
             role = -2 if body < 0 or body >= self.robot_body_count else 0
-            if name in ("left_foot_collision", "right_foot_collision"):
-                role = 1 if name.startswith("left") else 2
+            if body >= 0 and body < self.robot_body_count:
+                body_name = body_labels[body]
+                if body_name == "jaw_soft":
+                    role = -3
+                elif body in ankle_ids["left"] or name == "left_foot_collision" or "/ankle_l_v1/" in robot.body_label[body]:
+                    role = 1
+                elif body in ankle_ids["right"] or name == "right_foot_collision" or "/ankle_r_v1/" in robot.body_label[body]:
+                    role = 2
             roles.append(role)
-        # The only global collider authored by MicroDuckEnv is its infinite ground plane.
-        roles = roles * env.num_envs + [-1]
+        # One shared world collider is visible to each replicated physics world.
+        roles = roles * env.num_envs + [-1] * env.terrain.shape_count
         if len(roles) != env.model.shape_count:
-            raise ValueError("Official contact sensor requires replicated robots followed by one ground plane")
+            raise ValueError("Official contact sensors require replicated robot shapes and shared terrain shapes")
         self.roles = wp.array(roles, dtype=wp.int32, device=str(env.device))
 
     def reset(self, ids):
-        for sensor in (self.feet, self.support, self.self_contact):
+        for sensor in (self.feet, self.support, self.self_contact, self.robot_ground, self.head_ground):
             sensor.reset(ids)
 
     def update(self):
@@ -145,6 +168,8 @@ class OfficialSensors:
         contacts = env.contacts
         self.feet_found.zero_()
         self.self_found.zero_()
+        robot_found = torch.zeros_like(self.robot_ground.data.found)
+        head_found = torch.zeros_like(self.head_ground.data.found)
         env._sync()
         wp.launch(
             _contact_flags,
@@ -164,6 +189,8 @@ class OfficialSensors:
                 env.states[0].body_q,
                 self._feet_wp,
                 self._self_wp,
+                wp.from_torch(robot_found),
+                wp.from_torch(head_found),
             ],
             device=str(env.device),
         )
@@ -172,3 +199,5 @@ class OfficialSensors:
         self.feet.update(self.feet_found, env.physics_dt)
         self.support.update(self.feet.data.found[:, :1], env.physics_dt)
         self.self_contact.update(self.self_found, env.physics_dt)
+        self.robot_ground.update(robot_found, env.physics_dt)
+        self.head_ground.update(head_found, env.physics_dt)

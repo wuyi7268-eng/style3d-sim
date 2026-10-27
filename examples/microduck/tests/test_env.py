@@ -7,9 +7,29 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import newton
 
 sys.path.insert(0, str(Path(__file__).parents[3]))
-from examples.microduck.policy_spec import HOME, JOINT_NAMES, build_robot
+from examples.microduck.policy_spec import ASSET, HOME, JOINT_NAMES, build_robot
+
+
+@pytest.mark.parametrize("task", ["velocity", "velstand", "groundpick", "ballkick"])
+def test_full_self_collision_matches_mjcf_masks_and_exclusions(task):
+    reference = newton.ModelBuilder(up_axis=newton.Axis.Z)
+    newton.solvers.SolverMuJoCo.register_custom_attributes(reference)
+    reference.add_mjcf(
+        str(ASSET.with_name("robot_allcollisions.xml")),
+        floating=True,
+        collapse_fixed_joints=True,
+        enable_self_collisions=True,
+    )
+    robot, _, _ = build_robot(task=task, enable_self_collisions=True)
+    np.testing.assert_array_equal(robot.shape_flags, reference.shape_flags)
+    assert robot.shape_collision_filter_pairs == reference.shape_collision_filter_pairs
+    for name in ("mujoco:contype", "mujoco:conaffinity"):
+        actual, expected = robot.custom_attributes[name], reference.custom_attributes[name]
+        assert actual.default == expected.default
+        assert actual.values == expected.values
 
 
 def test_servo_mapping_on_actual_asset():

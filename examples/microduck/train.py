@@ -21,6 +21,9 @@ def main(argv=None):
         from examples.microduck.config import ppo_config
 
         cfg = ppo_config(args.num_envs)
+        from examples.microduck.official_ppo import apply_official_ppo
+
+        cfg = apply_official_ppo(cfg, env.official.spec, args.num_envs)
         # Resume the exact policy/optimizer configuration recorded with the checkpoint.
         if args.resume:
             cfg = play_cfg

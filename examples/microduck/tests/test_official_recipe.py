@@ -32,7 +32,14 @@ def test_exported_function_bodies_match_latest_upstream_definitions():
     functions = [n for n in copied.body if isinstance(n, ast.FunctionDef)]
     assert len(functions) >= 35
     for node in functions:
-        assert ast.dump(node, include_attributes=False) == ast.dump(upstream[node.name], include_attributes=False)
+        expected = ast.parse(ast.unparse(upstream[node.name])).body[0]
+        actual = ast.parse(ast.unparse(node)).body[0]
+        for tree in (expected, actual):
+            for child in ast.walk(tree):
+                if isinstance(child, ast.ImportFrom) and child.module == "mjlab.sensor":
+                    child.module = "official_sensors"
+                    child.level = 1
+        assert ast.dump(actual, include_attributes=False) == ast.dump(expected, include_attributes=False)
 
 
 def test_default_feet_selection_and_com_velocity_frame():
@@ -194,6 +201,8 @@ def test_swing_height_landing_cost_and_command_gate():
 def test_contact_flags_exclude_gaps_ball_and_other_worlds():
     feet = wp.zeros((2, 2), dtype=float, device="cpu")
     self_contact = wp.zeros((2, 1), dtype=float, device="cpu")
+    robot_ground = wp.zeros((2, 1), dtype=float, device="cpu")
+    head_ground = wp.zeros((2, 1), dtype=float, device="cpu")
 
     def array(values, dtype=wp.int32):
         return wp.array(values, dtype=dtype, device="cpu")
@@ -216,11 +225,15 @@ def test_contact_flags_exclude_gaps_ball_and_other_worlds():
             array([[0, 0, 0, 0, 0, 0, 1]] * 4, wp.transform),
             feet,
             self_contact,
+            robot_ground,
+            head_ground,
         ],
         device="cpu",
     )
     torch.testing.assert_close(wp.to_torch(feet), torch.tensor([[1.0, 0.0], [1.0, 0.0]]))
     torch.testing.assert_close(wp.to_torch(self_contact), torch.tensor([[1.0], [0.0]]))
+    torch.testing.assert_close(wp.to_torch(robot_ground), torch.tensor([[1.0], [1.0]]))
+    torch.testing.assert_close(wp.to_torch(head_ground), torch.zeros(2, 1))
 
 
 @pytest.mark.parametrize("enabled", [False, True])

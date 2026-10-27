@@ -82,6 +82,8 @@ class PolicyPlayback:
     @torch.no_grad()
     def step(self, actions):
         env = self.env
+        if env.task not in ("velocity", "velstand", "groundpick", "ballkick"):
+            return env.step(actions)[0]
         if actions.shape != env.actions.shape or not torch.isfinite(actions).all():
             raise ValueError("Expected finite actions with shape (num_envs, 14)")
         self.observations.cache = None
@@ -123,7 +125,7 @@ class PolicyPlayback:
             env._reset(ids)
         if env.viewer is None or env.task == "groundpick":
             env.official.update_commands()
-        #env.official.pushes.apply()     #随机推力
+        # env.official.pushes.apply()     #随机推力
         obs = self.observe()
         if env.viewer:
             env.viewer.begin_frame(env.sim_time)

@@ -7,7 +7,7 @@ import warp as wp
 
 from examples.locomotion.math_utils import quat_rotate_inverse
 
-TASKS = ("velocity", "velstand", "groundpick", "ballkick")
+from .task_registry import TASKS, base_task
 
 
 def rotate(quat, vector):
@@ -19,7 +19,7 @@ class TaskLogic:
     def __init__(self, task, robot):
         self.task = task
         self.ball_body = None
-        if task == "ballkick":
+        if base_task(task) == "ballkick":
             self.ball_q = len(robot.joint_q)
             self.ball_qd = len(robot.joint_qd)
             self.ball_body = robot.add_link(
@@ -34,6 +34,7 @@ class TaskLogic:
 
     def initialize(self, env):
         self.spawn = env.initial_q.clone()
+        self.spawn_velocity = torch.zeros_like(env._views()[1])
 
     def reset_state(self, env, ids, q):
         q[ids] = self.spawn[ids]

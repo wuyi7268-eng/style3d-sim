@@ -29,10 +29,25 @@ def update_velocity_command(env, viewer, command, key_was_down=None, previous_co
             if down and not key_was_down.get(name, False):
                 command[axis] += amount
             key_was_down[name] = down
+    # Resets and headless command sampling can replace the command between frames.
+    env.commands[:, :3] = torch.tensor(command, device=env.device)
     if command != previous_command:
-        env.commands[:, :3] = torch.tensor(command, device=env.device)
         print(f"Velocity command: vx={command[0]:.2f}, vy={command[1]:.2f} m/s, yaw={command[2]:.2f} rad/s", flush=True)
     return list(command)
+
+
+def update_playback_observation(env, obs):
+    terms = env.official.observations.spec["actor"]["terms"]
+    if not terms["head_command"]["func"].endswith(".zero_command_padding"):
+        env.commands[:, 3:7] = torch.tensor(HEAD_UP_COMMAND, device=env.device, dtype=obs.dtype)
+    # Unused command slots must remain zero even when a cached observation is refreshed.
+    # Their saved normalizer variance is zero; injecting a pose here shifts policy inputs dramatically.
+    for name, start, end in (("command", 0, 3), ("head_command", 3, 7), ("body_command", 7, 13)):
+        target = obs[:, 48 + start : 48 + end]
+        if terms[name]["func"].endswith(".zero_command_padding"):
+            target.zero_()
+        else:
+            target.copy_(env.commands[:, start:end])
 
 
 def main(argv=None):
@@ -81,10 +96,7 @@ def main(argv=None):
                     measured_start = start
                 if env.task in ("velocity", "velstand"):
                     previous_command = update_velocity_command(env, viewer, command, key_was_down, previous_command)
-                # Do not retain reset-sampled head commands during playback.
-                env.commands[:, 3:7] = torch.tensor(HEAD_UP_COMMAND, device=env.device, dtype=obs.dtype)
-                # Only command slots changed since the last step; keep proprioception and normalization intact.
-                obs[:, 48:] = env.commands
+                update_playback_observation(env, obs)
                 actions = policy(obs)
                 if args.diagnostics and frames == 0:
                     zero_command_obs = obs.clone()

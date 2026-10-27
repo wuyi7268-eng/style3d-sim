@@ -1,6 +1,6 @@
 """Upstream reset and termination formulas; generated from the bundled mdp.py."""
 
-# ruff: noqa: F841, UP037, UP045
+# ruff: noqa: F841, UP037, UP045, B008
 from __future__ import annotations
 
 import math
@@ -13,6 +13,8 @@ from .official_adapter import SceneEntityCfg
 
 ManagerBasedRlEnv = Entity = Any
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
+
+_ROULADE_FWD_SIGN = 1.0
 
 
 def _servo_joint_ids(env: "ManagerBasedRlEnv", asset: Entity) -> list:
@@ -45,6 +47,59 @@ def _env_origin_z(env: "ManagerBasedRlEnv", env_ids: torch.Tensor) -> torch.Tens
     entropy 5 → 33, in lockstep with prone_prob. Flat runs never noticed
     (origin z = 0)."""
     return env.scene.env_origins[env_ids.long(), 2]
+
+
+def reset_with_forward_velocity(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+    velocity_range: tuple[float, float] = (0.3, 0.8),
+    fraction_stages: list[dict] | None = None,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> None:
+    """Warm-start a fraction of reset environments with a random forward velocity.
+
+    The robot spawns already moving in its body-forward direction, so it first
+    discovers what coasting at speed feels like. The fraction decreases over
+    training, forcing it to progressively earn that speed from rest.
+
+    Args:
+        velocity_range: (min, max) forward speed in m/s.
+        fraction_stages: list of {"step": int, "fraction": float} dicts, sorted by step.
+            The fraction active at the current training step is used.
+            Example: [{"step":0,"fraction":0.8}, {"step":2000*24,"fraction":0.0}]
+        asset_cfg: robot entity config.
+    """
+    if fraction_stages is None:
+        fraction_stages = [{"step": 0, "fraction": 0.8}]
+    step = env.common_step_counter
+    fraction = fraction_stages[0]["fraction"]
+    for stage in fraction_stages:
+        if step >= stage["step"]:
+            fraction = stage["fraction"]
+    if len(env_ids) == 0 or fraction <= 0.0:
+        return
+    n_warmstart = max(1, int(len(env_ids) * fraction))
+    perm = torch.randperm(len(env_ids), device=env.device)[:n_warmstart]
+    warmstart_ids = env_ids[perm]
+    lo, hi = velocity_range
+    vx = lo + torch.rand(n_warmstart, device=env.device) * (hi - lo)
+    asset: Entity = env.scene[asset_cfg.name]
+    qpos_q_adr = asset.data.indexing.free_joint_q_adr[3:7]
+    q = asset.data.data.qpos[warmstart_ids][:, qpos_q_adr]
+    w, x, y, z = (q[:, 0], q[:, 1], q[:, 2], q[:, 3])
+    yaw = torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+    forward_world = torch.stack([torch.cos(yaw), torch.sin(yaw), torch.zeros_like(yaw)], dim=-1)
+    velocities = torch.zeros(n_warmstart, 6, device=env.device)
+    velocities[:, :3] = vx.unsqueeze(-1) * forward_world
+    asset.write_root_link_velocity_to_sim(velocities, env_ids=warmstart_ids)
+    _WHEEL_RADIUS = 0.0175
+    all_wheel_ids, _ = asset.find_joints("^passive_.*")
+    if all_wheel_ids:
+        joint_pos = asset.data.joint_pos[warmstart_ids].clone()
+        joint_vel = asset.data.joint_vel[warmstart_ids].clone()
+        omega = vx / _WHEEL_RADIUS
+        joint_vel[:, all_wheel_ids] = omega.unsqueeze(-1).expand(-1, len(all_wheel_ids))
+        asset.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=warmstart_ids)
 
 
 def _fallen_mask(env: ManagerBasedRlEnv, asset, gate_z_below: float, gate_tilt_above_deg: float) -> torch.Tensor:
@@ -81,6 +136,40 @@ def fallen_too_long(
     env._fallen_timer_s[env.episode_length_buf <= 1] = 0.0
     env._fallen_timer_s = torch.where(fallen, env._fallen_timer_s + env.step_dt, torch.zeros_like(env._fallen_timer_s))
     return env._fallen_timer_s >= max_duration_s
+
+
+def reset_rolling_entry(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor | None,
+    speed_range: tuple = (0.25, 0.45),
+    wheel_radius: float = 0.0175,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> None:
+    """Départ en ROULEMENT sans glissement (élan aux roues).
+
+    Tire une vitesse d'avance v par env ; met la vitesse LINÉAIRE de base (x
+    monde) = v ET la vitesse de ROTATION des 4 roues passives = v / r, donc
+    ω·r = v => zéro glissement au contact. Évite l'à-coup de l'ancienne poussée
+    base-seule (base qui bouge, roues immobiles = patinage brutal au 1er pas).
+    À exécuter APRÈS reset_base (qui pose la base ; ne plus lui donner de
+    velocity_range).
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    if env_ids is None:
+        env_ids = torch.arange(env.num_envs, device=env.device)
+    n = int(env_ids.shape[0])
+    lo, hi = speed_range
+    v = torch.rand(n, device=env.device) * (hi - lo) + lo
+    root_vel = torch.zeros(n, 6, device=env.device)
+    root_vel[:, 0] = v
+    asset.write_root_link_velocity_to_sim(root_vel, env_ids=env_ids)
+    wheel_ids = []
+    for name in ("passive_LF_?wheel", "passive_LR_?wheel", "passive_RF_?wheel", "passive_RR_?wheel"):
+        ids, _ = asset.find_joints(name)
+        wheel_ids.append(ids[0])
+    wheel_ids_t = torch.tensor(wheel_ids, device=env.device)
+    omega = (v / wheel_radius).unsqueeze(1).repeat(1, len(wheel_ids))
+    asset.write_joint_velocity_to_sim(omega, joint_ids=wheel_ids_t, env_ids=env_ids)
 
 
 def set_random_prone_orientation(
@@ -441,3 +530,116 @@ def _uniform_random_quat(n: int, device) -> torch.Tensor:
         ],
         dim=1,
     )
+
+
+def _roulade_state(env: ManagerBasedRlEnv) -> tuple:
+    if not hasattr(env, "_roulade_accum"):
+        z = torch.zeros(env.num_envs, device=env.device)
+        env._roulade_accum = z.clone()
+        env._roulade_max = z.clone()
+        env._roulade_paid = z.clone()
+        env._roulade_head_latch = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        env._roulade_last_update_step = -1
+    return (env._roulade_accum, env._roulade_max, env._roulade_paid)
+
+
+def reset_roulade_state(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+    standing_prob: float = 0.5,
+    midroll_prob: float = 0.5,
+    standing_z_min: float = 0.11,
+    standing_z_max: float = 0.12,
+    standing_tilt_max: float = 0.0,
+    forward_vel_range: tuple = (0.0, 0.0),
+    midroll_pitch_min: float = math.radians(50.0),
+    midroll_pitch_max: float = math.radians(185.0),
+    midroll_z_min: float = 0.05,
+    midroll_z_max: float = 0.1,
+    midroll_omega_range: tuple = (0.0, 0.0),
+    tuck_overrides: Optional[dict] = None,
+    tuck_factor_range: tuple = (0.3, 1.0),
+    joint_noise_std: float = 0.0,
+):
+    """Reset to a standing start or a mid-roll state (reverse curriculum).
+
+    Standing bucket: upright (±standing_tilt_max pitch/roll noise), random yaw,
+    HOME joints (left from reset_robot_joints), z in [standing_z_min, _max].
+    ``forward_vel_range`` is the élan hook: a per-env forward base velocity
+    (body x, mapped to world through the spawn yaw) sampled uniformly — 0 for
+    a standstill roll, widen it later to train rolls out of a walk.
+
+    Mid-roll bucket: pitched ``midroll_pitch_min..max`` into the roll (90° =
+    on the head, 180° = on the back), random yaw, legs lerped HOME→tuck by a
+    per-env factor in ``tuck_factor_range``, z in [midroll_z_min, _max],
+    optional forward angular momentum from ``midroll_omega_range``. The
+    rotation accumulator is initialized to the spawn pitch so progress
+    accounting (and the completion gates) stay consistent: a 170° spawn only
+    gets paid for the remaining ~190°.
+    """
+    if env_ids is None or len(env_ids) == 0:
+        return
+    env_ids = env_ids.to(env.device, dtype=torch.long)
+    num = len(env_ids)
+    asset: Entity = env.scene[asset_cfg.name]
+    accum, max_accum, paid = _roulade_state(env)
+    total = standing_prob + midroll_prob
+    is_mid = torch.rand(num, device=env.device) < midroll_prob / max(total, 1e-06)
+    yaw = torch.rand(num, device=env.device) * 2 * np.pi - np.pi
+    cy = torch.cos(yaw * 0.5)
+    sy = torch.sin(yaw * 0.5)
+    pitch = (torch.rand(num, device=env.device) * 2 - 1) * standing_tilt_max
+    mid_pitch = torch.rand(num, device=env.device) * (midroll_pitch_max - midroll_pitch_min) + midroll_pitch_min
+    pitch = torch.where(is_mid, mid_pitch, pitch)
+    roll = (torch.rand(num, device=env.device) * 2 - 1) * max(standing_tilt_max, math.radians(5.0))
+    cp = torch.cos(pitch * 0.5)
+    sp = torch.sin(pitch * 0.5)
+    cr = torch.cos(roll * 0.5)
+    sr = torch.sin(roll * 0.5)
+    qw = cr * cp * cy + sr * sp * sy
+    qx = sr * cp * cy - cr * sp * sy
+    qy = cr * sp * cy + sr * cp * sy
+    qz = cr * cp * sy - sr * sp * cy
+    quat = torch.stack([qw, qx, qy, qz], dim=1)
+    z_stand = torch.rand(num, device=env.device) * (standing_z_max - standing_z_min) + standing_z_min
+    z_mid = torch.rand(num, device=env.device) * (midroll_z_max - midroll_z_min) + midroll_z_min
+    new_z = torch.where(is_mid, z_mid, z_stand)
+    env.sim.data.qpos[env_ids, 2] = new_z + _env_origin_z(env, env_ids)
+    env.sim.data.qpos[env_ids, 3:7] = quat
+    env.sim.data.qvel[env_ids, :6] = 0.0
+    servo_ids = _servo_joint_ids(env, asset)
+    mid_env_ids = env_ids[is_mid]
+    if len(mid_env_ids) > 0 and tuck_overrides:
+        u = (
+            torch.rand(len(mid_env_ids), device=env.device) * (tuck_factor_range[1] - tuck_factor_range[0])
+            + tuck_factor_range[0]
+        )
+        for jnt_idx, angle in tuck_overrides.items():
+            col = 7 + servo_ids[jnt_idx]
+            home = env.sim.data.qpos[mid_env_ids, col]
+            env.sim.data.qpos[mid_env_ids, col] = home + u * (angle - home)
+    if len(mid_env_ids) > 0 and joint_noise_std > 0.0:
+        cols = torch.tensor([7 + j for j in servo_ids], device=env.device, dtype=torch.long)
+        noise = torch.randn(len(mid_env_ids), len(cols), device=env.device) * joint_noise_std
+        env.sim.data.qpos[mid_env_ids.unsqueeze(1), cols.unsqueeze(0)] += noise
+    if len(mid_env_ids) > 0 and midroll_omega_range[1] > 0.0:
+        omega = (
+            torch.rand(len(mid_env_ids), device=env.device) * (midroll_omega_range[1] - midroll_omega_range[0])
+            + midroll_omega_range[0]
+        )
+        env.sim.data.qvel[mid_env_ids, 4] = _ROULADE_FWD_SIGN * omega
+    stand_env_ids = env_ids[~is_mid]
+    if len(stand_env_ids) > 0 and forward_vel_range[1] > 0.0:
+        vx = (
+            torch.rand(len(stand_env_ids), device=env.device) * (forward_vel_range[1] - forward_vel_range[0])
+            + forward_vel_range[0]
+        )
+        yaw_s = yaw[~is_mid]
+        env.sim.data.qvel[stand_env_ids, 0] = vx * torch.cos(yaw_s)
+        env.sim.data.qvel[stand_env_ids, 1] = vx * torch.sin(yaw_s)
+    spawn_angle = torch.where(is_mid, mid_pitch, torch.zeros_like(mid_pitch))
+    accum[env_ids] = spawn_angle
+    max_accum[env_ids] = spawn_angle
+    paid[env_ids] = spawn_angle
+    env._roulade_head_latch[env_ids] = is_mid

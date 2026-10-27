@@ -1,6 +1,8 @@
 """Shared CLI validation, authentication and environment construction."""
 
 import argparse
+from .task_registry import TASKS
+
 import getpass
 import json
 import os
@@ -17,7 +19,7 @@ def positive_int(value):
 def setup(mode, argv=None):
     parser = argparse.ArgumentParser(description=f"MicroDuck {mode}: MuJoCo / SynReal")
     parser.add_argument("--training-config", type=Path, help="JSON file containing CLI defaults and optional PPO overrides")
-    parser.add_argument("--task", choices=["velocity", "velstand", "groundpick", "ballkick"], default=None)
+    parser.add_argument("--task", choices=TASKS, default=None)
     parser.add_argument("--recipe", choices=["official_adapted_v1"], default=None)
     parser.add_argument("--solver", choices=["mujoco", "synreal"], default="mujoco")
     parser.add_argument("--num-envs", type=positive_int, default=64 if mode == "train" else 1)
@@ -35,7 +37,12 @@ def setup(mode, argv=None):
     parser.add_argument(
         "--self-collisions",
         action="store_true",
-        help="enable robot self-collision in training or playback",
+        help="enable full robot collision geometry and self-collision with shared MJCF masks on both solvers",
+    )
+    parser.add_argument(
+        "--randomize-foot-friction",
+        action="store_true",
+        help="sample one foot-ground friction value per environment at startup",
     )
     if mode == "play":
         parser.add_argument("--policy", choices=["walk"], help="official walk.onnx policy; default when no checkpoint is given")
@@ -168,6 +175,7 @@ def create_env(args):
         task=args.task,
         recipe=args.recipe,
         enable_self_collisions=getattr(args, "self_collisions", False),
+        randomize_foot_friction=getattr(args, "randomize_foot_friction", False),
     )
     print(
         f"MicroDuck: solver={args.solver}, task={args.task}, recipe={args.recipe}, "

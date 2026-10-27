@@ -3,9 +3,10 @@
     "solver": "synreal",
     "recipe": "official_adapted_v1",
     "num_envs": 1024,
-    "iterations": 10000,
+    "iterations": 30000,
     "seed": 42,
     "device": "cuda:0",
+    "randomize_foot_friction": true,
     "viewer": "null",
     "run_name": "synreal_official_adapted"
   },

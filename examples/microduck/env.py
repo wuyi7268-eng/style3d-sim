@@ -8,8 +8,18 @@ import warp as wp
 
 from examples.locomotion.math_utils import projected_gravity, quat_rotate_inverse
 
-from .policy_spec import EFFORT, HOME, KD, KP, build_robot, filter_authored_collider
+from .policy_spec import (
+    EFFORT,
+    HOME,
+    JOINT_NAMES,
+    KD,
+    KP,
+    build_robot,
+    filter_authored_collider,
+    joint_coordinates,
+)
 from .stability import check_physics
+from .task_registry import base_task
 from .tasks import TASKS, TaskLogic
 
 
@@ -30,6 +40,7 @@ class MicroDuckEnv:
         task="velocity",
         recipe="official_adapted_v1",
         enable_self_collisions=False,
+        randomize_foot_friction=False,
     ):
         if solver not in ("mujoco", "synreal") or num_envs < 1:
             raise ValueError("solver must be mujoco or synreal; num_envs must be positive")
@@ -43,6 +54,7 @@ class MicroDuckEnv:
         self.step_dt = self.physics_dt * self.decimation
         self.official = None
         self.task = task
+        self.family = base_task(task)
         self.device = torch.device(device)
         self.num_envs = num_envs
         self.backend = solver
@@ -57,6 +69,7 @@ class MicroDuckEnv:
             "policy_dt": self.step_dt,
             "recipe": recipe,
             "self_collisions": enable_self_collisions,
+            "randomize_foot_friction": randomize_foot_friction,
             "physics_dt": self.physics_dt,
             "decimation": self.decimation,
         }
@@ -73,23 +86,31 @@ class MicroDuckEnv:
         # keeps the existing collision-free articulation unless explicitly changed.
         robot, qi, qdi = build_robot(builder_type, enable_self_collisions=enable_self_collisions, task=task)
         self.task_logic = TaskLogic(task, robot)
-        if task == "ballkick":
+        if self.family == "ballkick":
             filter_authored_collider(robot, len(robot.shape_body) - 1)
         builder = builder_type(up_axis=newton.Axis.Z)
         newton.solvers.SolverMuJoCo.register_custom_attributes(builder)
         builder.replicate(robot, num_envs)
-        ground = builder.add_ground_plane()
-        filter_authored_collider(builder, ground)
-        self.model = builder.finalize(device=device)
-        from .official_randomization import randomize_foot_friction
+        from .official_terrain import OfficialTerrain
 
-        self.cfg["foot_friction_randomization"] = randomize_foot_friction(self.model, task, num_envs, self.device)
+        self.terrain = OfficialTerrain(self, builder)
+        self.model = builder.finalize(device=device)
+        from .official_randomization import randomize_foot_friction as apply_foot_friction
+
+        self.cfg["foot_friction_randomization"] = apply_foot_friction(
+            self.model,
+            task,
+            num_envs,
+            self.device,
+            enabled=randomize_foot_friction,
+        )
         self.model.set_gravity((0.0, 0.0, -9.81))
         newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.model)
         if solver == "mujoco":
             self.solver = newton.solvers.SolverMuJoCo(
                 self.model,
                 integrator="implicitfast",
+                use_mujoco_cpu=self.device.type == "cpu",
                 solver="newton",
                 iterations=20,
                 update_data_interval=1,
@@ -117,6 +138,16 @@ class MicroDuckEnv:
         self.qi = torch.tensor(qi, device=self.device)
         self.qdi = torch.tensor(qdi, device=self.device)
         self.home = torch.tensor(HOME, device=self.device)
+        # Present a stable servo-first view while preserving all passive DOFs in physics.
+        coordinates = joint_coordinates(robot)
+        passive = [name for name in coordinates if name.startswith("passive_")]
+        self.joint_names = list(JOINT_NAMES) + passive
+        self.all_qi = torch.tensor(qi + [coordinates[name][0] for name in passive], device=self.device)
+        self.all_qdi = torch.tensor(qdi + [coordinates[name][1] for name in passive], device=self.device)
+        self.backlash_qi = self.backlash_qdi = None
+        if task.endswith("_backlash"):
+            indices = [self.joint_names.index(f"passive_{name}_backlash") for name in self.joint_names[:14]]
+            self.backlash_qi, self.backlash_qdi = self.all_qi[indices], self.all_qdi[indices]
         self.initial_q = wp.to_torch(self.model.joint_q).reshape(num_envs, -1).clone()
         self.actions = torch.zeros(num_envs, 14, device=self.device)
         self.commands = torch.zeros(num_envs, 13, device=self.device)
@@ -155,11 +186,12 @@ class MicroDuckEnv:
         self._sync()
         from .official_events import prepare_reset
 
+        self.terrain.reset(ids)
         prepare_reset(self.official, ids)
         for state in self.states:
             q, qd, _, _ = self._views(state)
             q[ids] = self.initial_q[ids]
-            qd[ids] = 0.0
+            qd[ids] = self.task_logic.spawn_velocity[ids]
             self.task_logic.reset_state(self, ids, q)
             self._sync()
             newton.eval_fk(self.model, state.joint_q, state.joint_qd, state)
@@ -191,6 +223,13 @@ class MicroDuckEnv:
             projected_gravity(quat),
         )
 
+    def encoder_state(self, q, qd):
+        position, velocity = q[:, self.qi], qd[:, self.qdi]
+        if self.backlash_qi is not None:
+            position = position + q[:, self.backlash_qi]
+            velocity = velocity + qd[:, self.backlash_qdi]
+        return position, velocity
+
     def get_observations(self):
         actor, critic = self.official.observations.compute()
         return actor, {"observations": {"critic": critic}}
@@ -216,7 +255,8 @@ class MicroDuckEnv:
             self._sync()
             q, qd, _, _ = self._views()
             # Encode the same clipped PD torque as a position target on both backends.
-            torque = (KP * (desired - q[:, self.qi]) - KD * qd[:, self.qdi]).clamp(-EFFORT, EFFORT)
+            position, velocity = self.encoder_state(q, qd)
+            torque = (KP * (desired - position) - KD * velocity).clamp(-EFFORT, EFFORT)
             targets[:, self.qdi] = q[:, self.qi] + (torque + KD * qd[:, self.qdi]) / KP
             self._sync()
             self.states[0].clear_forces()
@@ -233,7 +273,7 @@ class MicroDuckEnv:
         if not all(torch.isfinite(x).all() for x in (q, qd, pose, linear, angular)):
             raise FloatingPointError(f"{self.backend}: non-finite physics state")
         self.episode_length_buf += 1
-        timeout = self.episode_length_buf >= self.max_episode_length
+        timeout = (self.episode_length_buf >= self.max_episode_length) | self.terrain.out_of_bounds(pose)
         fallen = (pose[:, 2] < 0.065) | (gravity[:, 2] > -0.3)
         reward, task_terms = self.official.reward(q, qd, pose, linear, angular, gravity, torque, previous)
         from .official_events import termination

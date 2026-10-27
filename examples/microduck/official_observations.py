@@ -74,7 +74,24 @@ class OfficialObservations:
         self.imu_rotation = torch.cat((axis * torch.sin(angle / 2), torch.cos(angle / 2)), -1)
         # Force channels are omitted explicitly on both backends to retain cross-backend compatibility.
         self.omitted = {"critic": ["foot_contact_forces"]}
-        self.critic_dim = {"velocity": 70, "velstand": 70, "groundpick": 68, "ballkick": 74}[env.task]
+        dims = {
+            "base_lin_vel": 3,
+            "base_ang_vel": 3,
+            "projected_gravity": 3,
+            "joint_pos": 14,
+            "joint_vel": 14,
+            "actions": 14,
+            "command": 3,
+            "head_command": 4,
+            "body_command": 6,
+            "foot_height": 2,
+            "foot_air_time": 2,
+            "foot_contact": 2,
+            "ball_position": 3,
+            "ball_velocity": 3,
+            "wheel_vel": 4,
+        }
+        self.critic_dim = sum(dims[name] for name in self.spec["critic"]["terms"] if name != "foot_contact_forces")
 
     def reset(self, ids):
         self.cache = None
@@ -91,12 +108,16 @@ class OfficialObservations:
         zero_torque = torch.zeros_like(env.actions)
         recipe.refresh(q, qd, pose, linear, angular, gravity, zero_torque, env.actions)
         foot = recipe.sensors.feet.data
+        if hasattr(env, "encoder_state"):
+            position, velocity_j = env.encoder_state(q, qd)
+        else:
+            position, velocity_j = q[:, env.qi], qd[:, env.qdi]
         values = {
             "base_lin_vel": linear,
             "base_ang_vel": angular,
             "projected_gravity": gravity,
-            "joint_pos": q[:, env.qi] - env.home,
-            "joint_vel": qd[:, env.qdi],
+            "joint_pos": position - env.home,
+            "joint_vel": velocity_j,
             "actions": env.actions,
             "command": env.commands[:, :3],
             "head_command": env.commands[:, 3:7],
@@ -105,7 +126,10 @@ class OfficialObservations:
             "foot_air_time": torch.nan_to_num(foot.current_air_time),
             "foot_contact": (foot.found > 0).float(),
         }
-        if env.task == "ballkick":
+        if "wheel_vel" in self.spec["critic"]["terms"]:
+            ids = recipe.robot.find_joints(r"^passive_.*wheel")[0]
+            values["wheel_vel"] = qd[:, env.all_qdi[ids]]
+        if getattr(env, "family", env.task) == "ballkick":
             bodies = wp.to_torch(env.states[0].body_q).reshape(env.num_envs, -1, 7)
             velocity = wp.to_torch(env.states[0].body_qd).reshape(env.num_envs, -1, 6)
             values["ball_position"] = quat_rotate_inverse(pose[:, 3:], bodies[:, env.task_logic.ball_body, :3] - pose[:, :3])
