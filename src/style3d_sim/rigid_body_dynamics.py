@@ -24,6 +24,7 @@ IMPLICIT_EULER = 1
 LIE_GROUP_MIDPOINT = 2
 MIDPOINT_CAYLEY = 3
 NONE = 4
+VBD_SEMI_IMPLICIT = 5
 
 __all__ = [
     "cayley_increment_from_midpoint",
@@ -31,11 +32,13 @@ __all__ = [
     "integrate_implicit_euler",
     "integrate_lie_group_midpoint",
     "integrate_midpoint_cayley",
+    "integrate_vbd_semi_implicit",
     "integrate_rigid_body",
     "recover_explicit_euler_end_velocity",
     "recover_implicit_euler_end_velocity",
     "recover_lie_group_midpoint_end_velocity",
     "recover_midpoint_cayley_end_velocity",
+    "recover_vbd_semi_implicit_end_velocity",
     "recover_rigid_body_end_velocity",
     "solve_energy_momentum_midpoint",
 ]
@@ -202,6 +205,24 @@ def integrate_midpoint_cayley(
 
 
 @wp.func
+def integrate_vbd_semi_implicit(
+    inertia: wp.mat33,
+    angular_momentum: wp.vec3,
+    body_torque: wp.vec3,
+    dt: float,
+) -> tuple[wp.vec3, wp.mat33]:
+    """Use VBD's explicit gyro update and normalized quaternion Euler rotation."""
+    inverse_inertia = wp.inverse(inertia)
+    angular_velocity = inverse_inertia * angular_momentum
+    # Evaluate gyro before applying torque, as in Newton's rigid-body predictor.
+    next_velocity = angular_velocity + dt * inverse_inertia * (
+        body_torque - wp.cross(angular_velocity, inertia * angular_velocity)
+    )
+    increment = wp.normalize(wp.quat(0.5 * dt * next_velocity, 1.0))
+    return inertia * next_velocity, wp.quat_to_matrix(increment)
+
+
+@wp.func
 def integrate_rigid_body(
     inertia: wp.mat33,
     angular_momentum: wp.vec3,
@@ -217,6 +238,10 @@ def integrate_rigid_body(
         return integrate_lie_group_midpoint(inertia, angular_momentum, dt)
     elif integrator == MIDPOINT_CAYLEY:
         return integrate_midpoint_cayley(inertia, angular_momentum, dt)
+    elif integrator == VBD_SEMI_IMPLICIT:
+        # This dispatcher advances free bodies; forced prediction passes torque
+        # separately to avoid evaluating gyro at a torque-shifted velocity.
+        return integrate_vbd_semi_implicit(inertia, angular_momentum, wp.vec3(0.0), dt)
 
 
 @wp.func
@@ -287,6 +312,16 @@ def recover_midpoint_cayley_end_velocity(
 
 
 @wp.func
+def recover_vbd_semi_implicit_end_velocity(
+    inertia: wp.mat33,
+    relative_rotation: wp.mat33,
+    dt: float,
+) -> wp.vec3:
+    """Match VBD's shortest-arc quaternion difference after the positional solve."""
+    return _logarithmic_velocity(relative_rotation, dt)
+
+
+@wp.func
 def recover_rigid_body_end_velocity(
     inertia: wp.mat33,
     relative_rotation: wp.mat33,
@@ -302,3 +337,5 @@ def recover_rigid_body_end_velocity(
         return recover_lie_group_midpoint_end_velocity(inertia, relative_rotation, dt)
     elif integrator == MIDPOINT_CAYLEY:
         return recover_midpoint_cayley_end_velocity(inertia, relative_rotation, dt)
+    elif integrator == VBD_SEMI_IMPLICIT:
+        return recover_vbd_semi_implicit_end_velocity(inertia, relative_rotation, dt)

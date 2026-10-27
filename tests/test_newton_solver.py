@@ -730,6 +730,7 @@ def test_affine_body_velocity_reconstruction_uses_mass_weighted_rigid_fit(
             model.body_com,
             state.body_q,
             state.body_qd,
+            None,
         ],
         outputs=[state.particle_q, state.particle_qd],
         device=device,
@@ -2634,12 +2635,16 @@ def test_newton_solver_updates_affine_body_pose_during_capture(
         solver.synreal_model.particle_masses.ptr
         == model.synreal_particle_mass_diagonal.ptr
     )
-    assert solver.synreal_model.particle_mass_non_diagonal_count == len(
-        model.synreal_particle_mass_non_diagonal_indices
-    )
-    assert solver.synreal_model.particle_mass_non_diagonal_indices.ptr == 0
+    # Live ADMM inertia updates reserve column pairs even when their initial values are zero.
+    assert solver.synreal_model.particle_mass_non_diagonal_count == 3
+    assert solver.synreal_model.particle_mass_non_diagonal_indices.ptr == solver._particle_mass_non_diagonal_indices.ptr
+    assert solver.synreal_model.particle_mass_non_diagonal_values.ptr == solver._particle_mass_non_diagonal_values.ptr
+    columns = solver._affine_body_indices.numpy()[0, 1:]
+    expected_pairs = np.asarray([(columns[0], columns[1]), (columns[0], columns[2]), (columns[1], columns[2])])
+    np.testing.assert_array_equal(solver._particle_mass_non_diagonal_indices.numpy(), expected_pairs)
+    np.testing.assert_array_equal(solver._particle_mass_non_diagonal_values.numpy(), np.zeros(3))
+    assert len(model.synreal_particle_mass_non_diagonal_indices) == 0
     assert model.synreal_particle_mass_non_diagonal_indices.ptr is None
-    assert solver.synreal_model.particle_mass_non_diagonal_values.ptr == 0
     assert model.synreal_particle_mass_non_diagonal_values.ptr is None
     stream = wp.get_stream(model.device)
     initial_pose = state_in.body_q.numpy()[body].copy()

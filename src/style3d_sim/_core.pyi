@@ -16,13 +16,13 @@ __all__: list[str] = ['AffineBodyRigidityModel', 'Config', 'Contact', 'Control',
 class AffineBodyRigidityModel:
     """
     Members:
-    
+
       CO_ROTATED
-    
+
       ABD_ORTHOGONALITY
-    
+
       SIX_SPRINGS
-    
+
       SO3_AUGMENTED_LAGRANGIAN
     """
     ABD_ORTHOGONALITY: typing.ClassVar[AffineBodyRigidityModel]  # value = <AffineBodyRigidityModel.ABD_ORTHOGONALITY: 1>
@@ -66,9 +66,9 @@ class AffineBodyRigidityModel:
         ...
 class Config:
     """
-    
+
     Runtime configuration for a Style3D Sim solver.
-    
+
     Changes made through ``solver.config`` affect subsequent direct step calls.
     Previously captured CUDA graphs must be rebuilt after a configuration change.
     """
@@ -76,6 +76,18 @@ class Config:
         """
         Create the default solver configuration.
         """
+    @property
+    def affine_body_block_preconditioner(self) -> bool:
+        """Use a full affine-body block inverse as the PCG preconditioner."""
+    @affine_body_block_preconditioner.setter
+    def affine_body_block_preconditioner(self, arg0: bool) -> None:
+        ...
+    @property
+    def affine_body_contact_block_preconditioner(self) -> bool:
+        """Include hard-contact cross terms in affine-body PCG blocks; the contact operator is unchanged."""
+    @affine_body_contact_block_preconditioner.setter
+    def affine_body_contact_block_preconditioner(self, arg0: bool) -> None:
+        ...
     @property
     def affine_body_rigidity_model(self) -> AffineBodyRigidityModel:
         """
@@ -197,6 +209,86 @@ class Config:
     def rolling_friction_velocity_epsilon(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
     @property
+    def rigid_contact_friction_epsilon(self) -> float:
+        """
+        VBD-style rigid Coulomb smoothing speed [m/s]; zero preserves the native secant law.
+        """
+    @rigid_contact_friction_epsilon.setter
+    def rigid_contact_friction_epsilon(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rigid_contact_hard(self) -> bool:
+        """Use augmented-Lagrangian normal contact and displacement-based Coulomb friction."""
+    @rigid_contact_hard.setter
+    def rigid_contact_hard(self, arg0: bool) -> None:
+        ...
+    @property
+    def rigid_contact_history(self) -> bool:
+        """Warm-start hard-contact multipliers through Contact.match_index."""
+    @rigid_contact_history.setter
+    def rigid_contact_history(self, arg0: bool) -> None:
+        ...
+    @property
+    def rigid_contact_sliding_tangent(self) -> bool:
+        """Experimental Coulomb disk tangent; keep False for validated profiles because coupled ADMM can diverge."""
+    @rigid_contact_sliding_tangent.setter
+    def rigid_contact_sliding_tangent(self, arg0: bool) -> None:
+        ...
+    @property
+    def rigid_contact_alpha(self) -> float:
+        """Hard-contact C0 stabilization in [0, 1]."""
+    @rigid_contact_alpha.setter
+    def rigid_contact_alpha(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rigid_contact_beta(self) -> float:
+        """Hard-contact penalty ramp per iteration."""
+    @rigid_contact_beta.setter
+    def rigid_contact_beta(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rigid_contact_gamma(self) -> float:
+        """Hard-contact history decay in [0, 1]."""
+    @rigid_contact_gamma.setter
+    def rigid_contact_gamma(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def rigid_contact_k_start(self) -> float:
+        """Initial hard-contact penalty when ramping is enabled."""
+    @rigid_contact_k_start.setter
+    def rigid_contact_k_start(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def cable_linear_beta(self) -> float:
+        """Stretch/shear penalty ramp per nonlinear iteration; zero uses authored stiffness."""
+    @cable_linear_beta.setter
+    def cable_linear_beta(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def cable_angular_beta(self) -> float:
+        """Bend/twist penalty ramp per nonlinear iteration; zero uses authored stiffness."""
+    @cable_angular_beta.setter
+    def cable_angular_beta(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def cable_penalty_gamma(self) -> float:
+        """Per-step cable penalty decay, bounded by the configured seed and authored cap."""
+    @cable_penalty_gamma.setter
+    def cable_penalty_gamma(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def cable_linear_k_start(self) -> float:
+        """Stretch/shear penalty seed used only when cable_linear_beta is positive."""
+    @cable_linear_k_start.setter
+    def cable_linear_k_start(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
+    def cable_angular_k_start(self) -> float:
+        """Bend/twist penalty seed used only when cable_angular_beta is positive."""
+    @cable_angular_k_start.setter
+    def cable_angular_k_start(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    @property
     def self_collision_edge_edge_stiffness(self) -> float:
         """
         Dimensionless stiffness scale for edge-edge self-collision penalties.
@@ -246,7 +338,7 @@ class Config:
         ...
 class Contact:
     """
-    
+
     Non-owning views of Newton rigid- and soft-contact buffers consumed by the native solver.
     """
     def __init__(self) -> None:
@@ -260,6 +352,18 @@ class Contact:
         """
     @count.setter
     def count(self, arg1: Span) -> None:
+        ...
+    @property
+    def history_refresh(self) -> bool:
+        """False reuses current contact rows between collision refreshes."""
+    @history_refresh.setter
+    def history_refresh(self, arg0: bool) -> None:
+        ...
+    @property
+    def match_index(self) -> Span:
+        """Optional current-to-previous collision row correspondence for contact warm starts."""
+    @match_index.setter
+    def match_index(self, arg1: Span) -> None:
         ...
     @property
     def margin0(self) -> Span:
@@ -292,6 +396,22 @@ class Contact:
         """
     @normal.setter
     def normal(self, arg1: Span) -> None:
+        ...
+    @property
+    def offset0(self) -> Span:
+        """
+        Optional body-frame radial offset from the first contact point to its friction surface anchor.
+        """
+    @offset0.setter
+    def offset0(self, arg1: Span) -> None:
+        ...
+    @property
+    def offset1(self) -> Span:
+        """
+        Optional body-frame radial offset from the second contact point to its friction surface anchor.
+        """
+    @offset1.setter
+    def offset1(self, arg1: Span) -> None:
         ...
     @property
     def point0(self) -> Span:
@@ -407,7 +527,7 @@ class Contact:
         ...
 class Control:
     """
-    
+
     Non-owning views of Newton joint-control buffers consumed by the native solver.
     """
     def __init__(self) -> None:
@@ -455,23 +575,26 @@ class Control:
 class InertiaMode:
     """
     Members:
-    
+
       EXPLICIT_EULER
-    
+
       IMPLICIT_EULER
-    
+
       LIE_GROUP_MIDPOINT
-    
+
       MIDPOINT_CAYLEY
-    
+
       NONE
+
+      VBD_SEMI_IMPLICIT
     """
     EXPLICIT_EULER: typing.ClassVar[InertiaMode]  # value = <InertiaMode.EXPLICIT_EULER: 0>
     IMPLICIT_EULER: typing.ClassVar[InertiaMode]  # value = <InertiaMode.IMPLICIT_EULER: 1>
     LIE_GROUP_MIDPOINT: typing.ClassVar[InertiaMode]  # value = <InertiaMode.LIE_GROUP_MIDPOINT: 2>
     MIDPOINT_CAYLEY: typing.ClassVar[InertiaMode]  # value = <InertiaMode.MIDPOINT_CAYLEY: 3>
     NONE: typing.ClassVar[InertiaMode]  # value = <InertiaMode.NONE: 4>
-    __members__: typing.ClassVar[dict[str, InertiaMode]]  # value = {'EXPLICIT_EULER': <InertiaMode.EXPLICIT_EULER: 0>, 'IMPLICIT_EULER': <InertiaMode.IMPLICIT_EULER: 1>, 'LIE_GROUP_MIDPOINT': <InertiaMode.LIE_GROUP_MIDPOINT: 2>, 'MIDPOINT_CAYLEY': <InertiaMode.MIDPOINT_CAYLEY: 3>, 'NONE': <InertiaMode.NONE: 4>}
+    VBD_SEMI_IMPLICIT: typing.ClassVar[InertiaMode]  # value = <InertiaMode.VBD_SEMI_IMPLICIT: 5>
+    __members__: typing.ClassVar[dict[str, InertiaMode]]
     @typing.overload
     def __eq__(self, other: InertiaMode) -> bool:
         ...
@@ -509,9 +632,9 @@ class InertiaMode:
 class JointConstraintMode:
     """
     Members:
-    
+
       PENALTY
-    
+
       AUGMENTED_LAGRANGIAN
     """
     AUGMENTED_LAGRANGIAN: typing.ClassVar[JointConstraintMode]  # value = <JointConstraintMode.AUGMENTED_LAGRANGIAN: 1>
@@ -554,13 +677,13 @@ class JointConstraintMode:
 class LogLevel:
     """
     Members:
-    
+
       INFO
-    
+
       ERROR
-    
+
       DEBUG
-    
+
       WARNING
     """
     DEBUG: typing.ClassVar[LogLevel]  # value = <LogLevel.DEBUG: 2>
@@ -610,9 +733,9 @@ class LogLevel:
         ...
 class Model:
     """
-    
+
     Simulation topology and physical parameters consumed by a Solver.
-    
+
     All array properties are non-owning views of CUDA device memory. Their device
     allocations must remain valid while the solver uses this model.
     """
@@ -643,6 +766,66 @@ class Model:
         """
     @body_centers_of_mass.setter
     def body_centers_of_mass(self, arg1: Span) -> None:
+        ...
+    @property
+    def cable_count(self) -> int:
+        ...
+    @cable_count.setter
+    def cable_count(self, value: int) -> None:
+        ...
+    @property
+    def cable_body_indices(self) -> Span:
+        ...
+    @cable_body_indices.setter
+    def cable_body_indices(self, value: Span) -> None:
+        ...
+    @property
+    def cable_parent_transforms(self) -> Span:
+        ...
+    @cable_parent_transforms.setter
+    def cable_parent_transforms(self, value: Span) -> None:
+        ...
+    @property
+    def cable_child_transforms(self) -> Span:
+        ...
+    @cable_child_transforms.setter
+    def cable_child_transforms(self, value: Span) -> None:
+        ...
+    @property
+    def cable_stiffnesses(self) -> Span:
+        ...
+    @cable_stiffnesses.setter
+    def cable_stiffnesses(self, value: Span) -> None:
+        ...
+    @property
+    def cable_dampings(self) -> Span:
+        ...
+    @cable_dampings.setter
+    def cable_dampings(self, value: Span) -> None:
+        ...
+    @property
+    def cable_rest_bend_twist(self) -> Span:
+        ...
+    @cable_rest_bend_twist.setter
+    def cable_rest_bend_twist(self, value: Span) -> None:
+        ...
+    @property
+    def cable_angular_bias(self) -> Span:
+        ...
+    @cable_angular_bias.setter
+    def cable_angular_bias(self, value: Span) -> None:
+        ...
+    @property
+    def cable_angular_hessian(self) -> Span:
+        ...
+    @cable_angular_hessian.setter
+    def cable_angular_hessian(self, value: Span) -> None:
+        ...
+    @property
+    def cable_enabled(self) -> Span:
+        ...
+    @cable_enabled.setter
+    def cable_enabled(self, value: Span) -> None:
         ...
     @property
     def body_count(self) -> int:
@@ -1261,6 +1444,30 @@ class Model:
     def joint_drive_types(self, arg1: Span) -> None:
         ...
     @property
+    def joint_limit_lower(self) -> Span:
+        """Optional per-DOF angular stop parameter."""
+    @joint_limit_lower.setter
+    def joint_limit_lower(self, arg1: Span) -> None:
+        ...
+    @property
+    def joint_limit_upper(self) -> Span:
+        """Optional per-DOF angular stop parameter."""
+    @joint_limit_upper.setter
+    def joint_limit_upper(self, arg1: Span) -> None:
+        ...
+    @property
+    def joint_limit_stiffnesses(self) -> Span:
+        """Optional per-DOF angular stop parameter."""
+    @joint_limit_stiffnesses.setter
+    def joint_limit_stiffnesses(self, arg1: Span) -> None:
+        ...
+    @property
+    def joint_limit_dampings(self) -> Span:
+        """Optional per-DOF angular stop parameter."""
+    @joint_limit_dampings.setter
+    def joint_limit_dampings(self, arg1: Span) -> None:
+        ...
+    @property
     def joint_effort_limits(self) -> Span:
         """
         Device span containing symmetric joint effort magnitude limits.
@@ -1665,9 +1872,9 @@ class Model:
 class NonlinearSolver:
     """
     Members:
-    
+
       NEWTON
-    
+
       PD_NEWTON
     """
     NEWTON: typing.ClassVar[NonlinearSolver]  # value = <NonlinearSolver.NEWTON: 0>
@@ -1709,9 +1916,9 @@ class NonlinearSolver:
         ...
 class Solver:
     """
-    
+
     Time-step solver for a Style3D Sim simulation model.
-    
+
     Call initialize() once with a configured Model before calling step().
     """
     def __init__(self) -> None:
@@ -1721,14 +1928,20 @@ class Solver:
     def initialize(self, model: Model) -> None:
         """
         Initialize the solver for a model.
-        
+
         The model's device allocations must remain valid while the solver uses them.
         Call this method before the first call to step().
         """
-    def reset_joint_drive_state(self, stream: typing.Any = None) -> None:
+    def reserve_rigid_contact_capacity(self, capacity: typing.SupportsInt | typing.SupportsIndex) -> None:
+        """Reserve contact state before CUDA graph capture."""
+    def reset_joint_drive_state(self, stream: typing.Any = None, mask: Span = ...) -> None:
         """
         Reset persistent joint-coordinate branches after an external state reset.
         """
+    def reset_cable_penalty_state(self, stream: typing.Any = None, mask: Span = ...) -> None:
+        """Restore cable penalty seeds; an optional int mask selects flattened cable state rows."""
+    def copy_cable_penalties(self, output: Span, stream: typing.Any = None) -> None:
+        """Copy four current penalties per flattened cable state row into a device Vec4f span."""
     @typing.overload
     def step(self, state_in: State, state_out: State, dt: typing.SupportsFloat | typing.SupportsIndex, stream: typing.Any = None) -> None:
         """
@@ -1743,16 +1956,16 @@ class Solver:
     def step(self, state_in: State, state_out: State, control: Control, contact: Contact, dt: typing.SupportsFloat | typing.SupportsIndex, stream: typing.Any = None) -> None:
         """
         Advance the simulation by one time step.
-        
+
         Parameters:
-        	state_in: State containing the input particle data.
-        	state_out: State whose referenced device memory receives the output data.
-        	control: Non-owning views of Newton's generalized joint-control buffers.
-        	contact: Non-owning views of the active Newton rigid-contact buffers.
-        	dt: Time-step duration.
-        	stream: CUDA Stream Protocol object, integer CUDA stream handle, or None for
-        		the default stream. All asynchronous work is submitted to this stream.
-        
+            state_in: State containing the input particle data.
+            state_out: State whose referenced device memory receives the output data.
+            control: Non-owning views of Newton's generalized joint-control buffers.
+            contact: Non-owning views of the active Newton rigid-contact buffers.
+            dt: Time-step duration.
+            stream: CUDA Stream Protocol object, integer CUDA stream handle, or None for
+                the default stream. All asynchronous work is submitted to this stream.
+
         initialize() must be called before this method. All referenced device
         allocations must remain valid until the solver work finishes.
         """
@@ -1766,9 +1979,9 @@ class Solver:
         ...
 class Span:
     """
-    
+
     A non-owning view of a contiguous CUDA device-memory range.
-    
+
     Span stores an opaque device address and an element count. It does not allocate,
     free, or dereference the referenced memory. Construction and field assignment
     reject a null address paired with a nonzero element count.
@@ -1803,9 +2016,9 @@ class Span:
         """
 class State:
     """
-    
+
     Particle positions and velocities used as solver input or output.
-    
+
     Both properties are non-owning views of mutable CUDA device memory. Their
     device allocations must remain valid until the associated solver work finishes.
     """

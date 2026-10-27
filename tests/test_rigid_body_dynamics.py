@@ -4,9 +4,14 @@ import pytest
 wp = pytest.importorskip("warp")
 
 from style3d_sim.rigid_body_dynamics import (  # noqa: E402
+    VBD_SEMI_IMPLICIT,
     integrate_rigid_body,
+    integrate_vbd_semi_implicit,
     recover_rigid_body_end_velocity,
 )
+from newton._src.math.spatial import quat_velocity as upstream_quat_velocity  # noqa: E402
+from newton._src.solvers.solver import integrate_rigid_body as upstream_integrate_rigid_body  # noqa: E402
+from style3d_sim.newton_solver import _predict_affine_body_inertia  # noqa: E402
 
 
 INTEGRATORS = (
@@ -198,3 +203,155 @@ def test_exponential_methods_use_step_angle_for_small_velocity(integrator: int) 
 
     assert np.allclose(rotation, expected_rotation, atol=2.0e-6)
     assert np.allclose(recovered_velocity, initial_velocity, rtol=2.0e-6, atol=1.0e-12)
+
+
+@wp.kernel
+def _upstream_rigid_prediction(
+    pose: wp.array(dtype=wp.transform),
+    velocity: wp.array(dtype=wp.spatial_vector),
+    wrench: wp.array(dtype=wp.spatial_vector),
+    com: wp.array(dtype=wp.vec3),
+    mass: wp.array(dtype=float),
+    inertia: wp.array(dtype=wp.mat33),
+    dt: float,
+    predicted_pose: wp.array(dtype=wp.transform),
+    predicted_velocity: wp.array(dtype=wp.spatial_vector),
+):
+    pose_value, velocity_value = upstream_integrate_rigid_body(
+        pose[0], velocity[0], wrench[0], com[0], inertia[0],
+        1.0 / mass[0], wp.inverse(inertia[0]), wp.vec3(0.0), 0.0, dt,
+    )
+    predicted_pose[0] = pose_value
+    predicted_velocity[0] = velocity_value
+
+
+@pytest.mark.parametrize(
+    "angular_velocity, torque",
+    (
+        ((0.7, 1.3, -0.4), (2.4, -1.6, 0.9)),
+        ((0.7, 1.3, -0.4), (0.0, 0.0, 0.0)),
+        ((0.0, 0.0, 0.0), (2.4, -1.6, 0.9)),
+    ),
+    ids=("spin-and-torque", "free-spin", "torque-from-rest"),
+)
+def test_vbd_predictor_matches_upstream_on_cpu(angular_velocity, torque):
+    inertia = np.asarray(((1.7, 0.3, -0.2), (0.3, 2.4, 0.4), (-0.2, 0.4, 3.1)), dtype=np.float32)
+    axis = np.asarray((0.2, -0.5, 0.7), dtype=np.float32)
+    axis /= np.linalg.norm(axis)
+    rotation = wp.quat_from_axis_angle(wp.vec3(*axis), 1.2)
+    body_pose = wp.array([wp.transform(wp.vec3(0.4, -0.2, 0.7), rotation)], dtype=wp.transform, device="cpu")
+    body_velocity = wp.array(
+        [wp.spatial_vector(0.3, -0.4, 0.5, *angular_velocity)],
+        dtype=wp.spatial_vector, device="cpu",
+    )
+    body_wrench = wp.array(
+        [wp.spatial_vector(0.2, 0.7, -0.6, *torque)],
+        dtype=wp.spatial_vector, device="cpu",
+    )
+    com = wp.array([wp.vec3(0.07, -0.03, 0.04)], dtype=wp.vec3, device="cpu")
+    mass = wp.array([2.3], dtype=float, device="cpu")
+    inertia_wp = wp.array([wp.mat33(inertia)], dtype=wp.mat33, device="cpu")
+    ids = wp.array([0], dtype=wp.int32, device="cpu")
+    fixed = wp.zeros(1, dtype=wp.int32, device="cpu")
+    predicted = wp.empty(1, dtype=wp.transform, device="cpu")
+    predicted_velocity = wp.empty(1, dtype=wp.spatial_vector, device="cpu")
+    reference = wp.empty_like(predicted)
+    reference_velocity = wp.empty_like(predicted_velocity)
+    dt = 0.07
+    wp.launch(
+        _predict_affine_body_inertia, dim=1,
+        inputs=[body_pose, body_velocity, body_wrench, ids, com, mass, inertia_wp, fixed, VBD_SEMI_IMPLICIT, dt],
+        outputs=[predicted, predicted_velocity], device="cpu",
+    )
+    wp.launch(
+        _upstream_rigid_prediction, dim=1,
+        inputs=[body_pose, body_velocity, body_wrench, com, mass, inertia_wp, dt],
+        outputs=[reference, reference_velocity], device="cpu",
+    )
+    actual_pose, reference_pose = predicted.numpy()[0], reference.numpy()[0]
+    assert np.allclose(actual_pose[:3], reference_pose[:3], atol=2.0e-6)
+    assert abs(np.dot(actual_pose[3:], reference_pose[3:])) > 1.0 - 2.0e-6
+    assert np.allclose(predicted_velocity.numpy(), reference_velocity.numpy(), atol=2.0e-6)
+
+
+@wp.kernel
+def _forced_vbd_step(
+    inertia: wp.array(dtype=wp.mat33),
+    momentum: wp.array(dtype=wp.vec3),
+    torque: wp.array(dtype=wp.vec3),
+    dt: float,
+    next_momentum: wp.array(dtype=wp.vec3),
+):
+    momentum_value, _rotation = integrate_vbd_semi_implicit(inertia[0], momentum[0], torque[0], dt)
+    next_momentum[0] = momentum_value
+
+
+def test_vbd_gyro_uses_original_spin_before_torque_on_cpu():
+    inertia = np.asarray(((1.7, 0.3, -0.2), (0.3, 2.4, 0.4), (-0.2, 0.4, 3.1)), dtype=np.float32)
+    spin = np.asarray((0.7, 1.3, -0.4), dtype=np.float32)
+    torque = np.asarray((2.4, -1.6, 0.9), dtype=np.float32)
+    momentum = inertia @ spin
+    dt = 0.07
+    expected = momentum + dt * (torque - np.cross(spin, momentum))
+    forced_momentum = momentum + dt * torque
+    wrong_order = forced_momentum + dt * np.cross(forced_momentum, np.linalg.solve(inertia, forced_momentum))
+    output = wp.empty(1, dtype=wp.vec3, device="cpu")
+    wp.launch(
+        _forced_vbd_step, dim=1,
+        inputs=[
+            wp.array([wp.mat33(inertia)], dtype=wp.mat33, device="cpu"),
+            wp.array([wp.vec3(*momentum)], dtype=wp.vec3, device="cpu"),
+            wp.array([wp.vec3(*torque)], dtype=wp.vec3, device="cpu"), dt,
+        ], outputs=[output], device="cpu",
+    )
+    assert np.linalg.norm(expected - wrong_order) > 1.0e-3
+    assert np.allclose(output.numpy()[0], expected, atol=2.0e-6)
+
+
+@wp.kernel
+def _compare_vbd_endpoint_closure(
+    previous: wp.array(dtype=wp.quat),
+    current: wp.array(dtype=wp.quat),
+    dt: float,
+    actual: wp.array(dtype=wp.vec3),
+    reference: wp.array(dtype=wp.vec3),
+):
+    relative = wp.quat_inverse(previous[0]) * current[0]
+    velocity = recover_rigid_body_end_velocity(
+        wp.identity(3, dtype=float), wp.quat_to_matrix(relative), dt, VBD_SEMI_IMPLICIT,
+    )
+    actual[0] = wp.quat_rotate(current[0], velocity)
+    reference[0] = upstream_quat_velocity(current[0], previous[0], dt)
+
+
+@pytest.mark.parametrize(
+    "angle, sign", ((1.0e-4, 1.0), (0.8, 1.0), (0.8, -1.0), (3.05, -1.0)),
+)
+def test_vbd_log_closure_matches_upstream_on_cpu(angle, sign):
+    previous = wp.quat_from_axis_angle(wp.normalize(wp.vec3(0.2, -0.5, 0.7)), 1.2)
+    increment = wp.quat_from_axis_angle(wp.normalize(wp.vec3(-0.3, 0.4, 0.8)), angle)
+    current = previous * increment
+    current = wp.quat(*(sign * np.asarray(current)))
+    actual = wp.empty(1, dtype=wp.vec3, device="cpu")
+    reference = wp.empty_like(actual)
+    wp.launch(
+        _compare_vbd_endpoint_closure, dim=1,
+        inputs=[
+            wp.array([previous], dtype=wp.quat, device="cpu"),
+            wp.array([current], dtype=wp.quat, device="cpu"), 0.02,
+        ], outputs=[actual, reference], device="cpu",
+    )
+    assert np.allclose(actual.numpy(), reference.numpy(), rtol=2.0e-5, atol=2.0e-5)
+
+
+def test_vbd_principal_axis_log_recovery_preserves_upstream_attenuation_on_cpu():
+    inertia = np.diag((1.0, 2.0, 3.0)).astype(np.float32)
+    spin = np.asarray((0.0, 0.0, 4.0), dtype=np.float32)
+    dt = 0.05
+    momentum, rotation, recovered = _run_step(inertia, spin, dt, VBD_SEMI_IMPLICIT, "cpu")
+    angle = 2.0 * np.arctan(0.5 * dt * spin[2])
+    expected = np.asarray((0.0, 0.0, angle / dt))
+    assert np.allclose(momentum, inertia @ spin, atol=2.0e-6)
+    assert np.allclose(rotation.T @ rotation, np.eye(3), atol=2.0e-6)
+    assert np.allclose(recovered, expected, atol=2.0e-6)
+    assert recovered[2] < spin[2]

@@ -74,6 +74,12 @@ uv run python examples/example_rrabd_joints.py --help
 `joint_f` 不是关节位置；prismatic 位置单位为 m，角度目标使用 rad。
 如果在 step 前调用 FK 将 body 摆到目标位置，会把物理驱动变成外部强制姿态设置。
 
+标量角关节通过 `joint_limit_lower/upper`（rad）和 `joint_limit_ke/kd` 配置单边限位。
+限位独立于电机输出限制；有限刚度允许受载后出现少量越界。
+局部重置时，使用 `solver.sync_affine_body_state(state, body_mask=mask)`，其中 mask 是形状为
+`(model.body_count,)` 的 int32 CUDA 数组。非零项选中 body 及其相连关节的角度历史。
+前面的 FK 更新也应使用相同的选择范围，以保留其他环境的状态。
+
 ## 查看电机输出
 
 ```python

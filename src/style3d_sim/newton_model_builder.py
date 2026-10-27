@@ -591,12 +591,14 @@ class ModelBuilder(_newton.ModelBuilder):
         ]
 
     def _dynamic_body_indices(self) -> list[int]:
-        """Return all dynamic bodies in body order."""
-        dynamic_flag = int(_newton.BodyFlags.DYNAMIC)
+        """Return bodies requiring contact or joint proxies in body order."""
+        # Prescribed bodies need inactive proxies so their moving surfaces can
+        # transmit contact forces to dynamic bodies.
+        proxy_flags = int(_newton.BodyFlags.DYNAMIC | _newton.BodyFlags.KINEMATIC)
         return [
             body
             for body, flags in enumerate(self.body_flags)
-            if int(flags) & dynamic_flag
+            if int(flags) & proxy_flags
         ]
 
     def _add_affine_body_proxies(self) -> None:
@@ -624,13 +626,17 @@ class ModelBuilder(_newton.ModelBuilder):
 
         for body_index in dynamic_bodies:
             mass = float(self.body_mass[body_index])
-            if not np.isfinite(mass) or mass <= 0.0:
+            if not np.isfinite(mass) or mass < 0.0:
                 raise ValueError(
-                    f"Dynamic body {body_index} must have positive mass before finalization."
+                    f"Dynamic body {body_index} must have non-negative mass before finalization."
                 )
 
+            # Newton uses zero-mass dynamic bodies as prescribed cable endpoints.
+            # Their inactive proxies still need a nonsingular native mass metric.
+            proxy_mass = mass if mass > 0.0 else 1.0
+            proxy_inertia = self.body_inertia[body_index] if mass > 0.0 else np.eye(3)
             mass_matrix = self._proxy_mass_matrix(
-                body_index, mass, self.body_inertia[body_index]
+                body_index, proxy_mass, proxy_inertia
             )
             body_transform = np.asarray(self.body_q[body_index], dtype=np.float64)
             body_position = body_transform[:3]
@@ -787,12 +793,13 @@ class ModelBuilder(_newton.ModelBuilder):
             self.affine_body_particle_indices, dtype=wp.vec4i, device=model.device
         )
         model.synreal_affine_body_masses = wp.array(
-            [self.body_mass[body] for body in body_ids],
+            [self.body_mass[body] if self.body_mass[body] > 0.0 else 1.0 for body in body_ids],
             dtype=wp.float32,
             device=model.device,
         )
         model.synreal_affine_body_inertia = wp.array(
-            [self.body_inertia[body] for body in body_ids],
+            [np.asarray(self.body_inertia[body]).reshape(3, 3) if self.body_mass[body] > 0.0 else np.eye(3)
+             for body in body_ids],
             dtype=wp.mat33,
             device=model.device,
         )

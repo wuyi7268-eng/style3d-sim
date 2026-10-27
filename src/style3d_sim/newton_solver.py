@@ -16,7 +16,9 @@ from ._core import Config, Contact, Control, Model, Solver, Span, State, is_logg
 from .joint_drive_effort import evaluate_joint_drive_effort
 from .rigid_body_dynamics import (
     NONE,
+    VBD_SEMI_IMPLICIT,
     integrate_rigid_body,
+    integrate_vbd_semi_implicit,
     recover_rigid_body_end_velocity,
 )
 
@@ -29,6 +31,13 @@ __all__ = ["ModelBuilder", "NewtonSolver"]
 import warp as wp
 import numpy as np
 import newton as _newton
+from newton._src.core.reset import reset_world_selected
+from newton._src.solvers.coupled.interface import CouplingInterface
+from .cable_material import (
+    compute_cable_dahl_parameters,
+    init_cable_rest_bend_twist,
+    update_cable_dahl_state,
+)
 
 
 def _ensure_style3d_login() -> None:
@@ -57,6 +66,47 @@ def __getattr__(name: str) -> Any:
 
 
 @wp.kernel
+def _refresh_affine_body_mass_kernel(
+    body_mass: wp.array(dtype=float),
+    body_inertia: wp.array(dtype=wp.mat33),
+    body_com: wp.array(dtype=wp.vec3),
+    affine_body_ids: wp.array(dtype=wp.int32),
+    affine_body_indices: wp.array(dtype=wp.vec4i),
+    rotation_locked: wp.array(dtype=wp.int32),
+    inertia_offsets: wp.array(dtype=wp.mat33),
+    mass_pair_slots: wp.array(dtype=wp.vec3i),
+    mass_diagonal: wp.array(dtype=float),
+    mass_non_diagonal: wp.array(dtype=float),
+    affine_body_mass: wp.array(dtype=float),
+    affine_body_inertia: wp.array(dtype=wp.mat33),
+    affine_body_com: wp.array(dtype=wp.vec3),
+):
+    affine = wp.tid()
+    body = affine_body_ids[affine]
+    mass = body_mass[body]
+    inertia = body_inertia[body]
+    # Prescribed bodies and translation-only proxies retain a nonsingular dummy
+    # column metric. Their authored mobility masks still prevent rotation.
+    if mass <= 0.0 or rotation_locked[affine] != 0:
+        inertia = wp.identity(3, dtype=float)
+    else:
+        inertia = 0.5 * (inertia + wp.transpose(inertia)) + inertia_offsets[affine]
+    proxy_mass = wp.where(mass > 0.0, mass, 1.0)
+    second_moment = 0.5 * wp.trace(inertia) * wp.identity(3, dtype=float) - inertia
+    particles = affine_body_indices[affine]
+    mass_diagonal[particles[0]] = proxy_mass
+    for axis in range(3):
+        mass_diagonal[particles[axis + 1]] = second_moment[axis, axis]
+    slots = mass_pair_slots[affine]
+    mass_non_diagonal[slots[0]] = second_moment[0, 1]
+    mass_non_diagonal[slots[1]] = second_moment[0, 2]
+    mass_non_diagonal[slots[2]] = second_moment[1, 2]
+    affine_body_mass[affine] = proxy_mass
+    affine_body_inertia[affine] = inertia
+    affine_body_com[affine] = body_com[body]
+
+
+@wp.kernel
 def _predict_affine_body_inertia(
     body_q: wp.array(dtype=wp.transform),
     body_qd: wp.array(dtype=wp.spatial_vector),
@@ -65,6 +115,7 @@ def _predict_affine_body_inertia(
     body_com: wp.array(dtype=wp.vec3),
     body_mass: wp.array(dtype=wp.float32),
     affine_body_inertia: wp.array(dtype=wp.mat33),
+    fixed_affine_body_flags: wp.array(dtype=wp.int32),
     inertia_mode: int,
     dt: float,
     predicted_body_q: wp.array(dtype=wp.transform),
@@ -74,6 +125,10 @@ def _predict_affine_body_inertia(
     affine_body = wp.tid()
     body = affine_body_ids[affine_body]
     pose = body_q[body]
+    if fixed_affine_body_flags[affine_body] != 0:
+        predicted_body_q[body] = pose
+        predicted_body_qd[body] = wp.spatial_vector(wp.vec3(0.0), wp.vec3(0.0))
+        return
     rotation = wp.transform_get_rotation(pose)
     velocity = body_qd[body]
     wrench = body_f[body]
@@ -91,17 +146,29 @@ def _predict_affine_body_inertia(
     )
     predicted_center = center + dt * linear_velocity
 
-    next_angular_momentum, relative_rotation_matrix = integrate_rigid_body(
-        inertia,
-        initial_angular_momentum,
-        dt,
-        inertia_mode,
-    )
+    if inertia_mode == VBD_SEMI_IMPLICIT:
+        # VBD evaluates gyro at the original spin, before the external torque
+        # kick. Passing initial_angular_momentum here would change that order.
+        next_angular_momentum, relative_rotation_matrix = integrate_vbd_semi_implicit(
+            inertia,
+            inertia * body_angular_velocity,
+            wp.quat_rotate_inv(rotation, wp.spatial_bottom(wrench)),
+            dt,
+        )
+    else:
+        next_angular_momentum, relative_rotation_matrix = integrate_rigid_body(
+            inertia,
+            initial_angular_momentum,
+            dt,
+            inertia_mode,
+        )
     relative_rotation = wp.quat_from_matrix(relative_rotation_matrix)
     predicted_rotation = rotation * relative_rotation
     next_angular_velocity = wp.quat_rotate(
         predicted_rotation, inverse_inertia * next_angular_momentum
     )
+    if inertia_mode == VBD_SEMI_IMPLICIT:
+        next_angular_velocity = wp.quat_rotate(rotation, inverse_inertia * next_angular_momentum)
     predicted_body_q[body] = wp.transform(
         predicted_center - wp.quat_rotate(predicted_rotation, body_com[body]),
         predicted_rotation,
@@ -143,9 +210,9 @@ def _predict_affine_body_velocities(
         particle_qd[particle] = (predicted_axis - current_axis) / dt
 
 
-@wp.kernel
-def _sync_affine_body_state(
-    reference_particle_q: wp.array(dtype=wp.vec3),
+@wp.func
+def _write_affine_body_state(
+    affine_body: int,
     affine_body_indices: wp.array(dtype=wp.vec4i),
     affine_body_ids: wp.array(dtype=wp.int32),
     body_com: wp.array(dtype=wp.vec3),
@@ -154,8 +221,6 @@ def _sync_affine_body_state(
     particle_q: wp.array(dtype=wp.vec3),
     particle_qd: wp.array(dtype=wp.vec3),
 ):
-    """Map authored Newton body poses and twists to direct ABD coordinates."""
-    affine_body = wp.tid()
     indices = affine_body_indices[affine_body]
     body = affine_body_ids[affine_body]
     pose = body_q[body]
@@ -163,20 +228,218 @@ def _sync_affine_body_state(
     world_com = wp.transform_get_translation(pose) + wp.quat_rotate(
         rotation, body_com[affine_body]
     )
-    linear_velocity = wp.spatial_top(body_qd[body])
-    angular_velocity = wp.spatial_bottom(body_qd[body])
-
     x_axis = wp.quat_rotate(rotation, wp.vec3(1.0, 0.0, 0.0))
     y_axis = wp.quat_rotate(rotation, wp.vec3(0.0, 1.0, 0.0))
     z_axis = wp.quat_rotate(rotation, wp.vec3(0.0, 0.0, 1.0))
-    particle_q[indices[0]] = world_com
-    particle_qd[indices[0]] = linear_velocity
-    particle_q[indices[1]] = x_axis
-    particle_q[indices[2]] = y_axis
-    particle_q[indices[3]] = z_axis
-    particle_qd[indices[1]] = wp.cross(angular_velocity, x_axis)
-    particle_qd[indices[2]] = wp.cross(angular_velocity, y_axis)
-    particle_qd[indices[3]] = wp.cross(angular_velocity, z_axis)
+    if particle_q:
+        particle_q[indices[0]] = world_com
+        particle_q[indices[1]] = x_axis
+        particle_q[indices[2]] = y_axis
+        particle_q[indices[3]] = z_axis
+    if particle_qd:
+        linear_velocity = wp.spatial_top(body_qd[body])
+        angular_velocity = wp.spatial_bottom(body_qd[body])
+        particle_qd[indices[0]] = linear_velocity
+        particle_qd[indices[1]] = wp.cross(angular_velocity, x_axis)
+        particle_qd[indices[2]] = wp.cross(angular_velocity, y_axis)
+        particle_qd[indices[3]] = wp.cross(angular_velocity, z_axis)
+
+
+@wp.kernel
+def _sync_affine_body_state(
+    reference_particle_q: wp.array(dtype=wp.vec3),
+    affine_body_indices: wp.array(dtype=wp.vec4i),
+    affine_body_ids: wp.array(dtype=wp.int32),
+    body_com: wp.array(dtype=wp.vec3),
+    body_q: wp.array(dtype=wp.transform),
+    body_qd: wp.array(dtype=wp.spatial_vector),
+    body_mask: wp.array(dtype=wp.int32),
+    particle_q: wp.array(dtype=wp.vec3),
+    particle_qd: wp.array(dtype=wp.vec3),
+):
+    """Map authored Newton body poses and twists to direct ABD coordinates."""
+    if body_mask and body_mask[affine_body_ids[wp.tid()]] == 0:
+        return
+    _write_affine_body_state(
+        wp.tid(), affine_body_indices, affine_body_ids, body_com, body_q, body_qd, particle_q, particle_qd
+    )
+
+
+@wp.kernel
+def _sync_selected_affine_body_state(
+    affine_body_indices: wp.array(dtype=wp.vec4i),
+    affine_body_ids: wp.array(dtype=wp.int32),
+    body_com: wp.array(dtype=wp.vec3),
+    body_q: wp.array(dtype=wp.transform),
+    body_qd: wp.array(dtype=wp.spatial_vector),
+    body_world: wp.array(dtype=wp.int32),
+    world_mask: wp.array(dtype=wp.bool),
+    world_count: int,
+    reset_all: bool,
+    particle_q: wp.array(dtype=wp.vec3),
+    particle_qd: wp.array(dtype=wp.vec3),
+):
+    affine_body = wp.tid()
+    if not reset_all:
+        if not reset_world_selected(body_world[affine_body_ids[affine_body]], world_mask, world_count):
+            return
+    _write_affine_body_state(
+        affine_body, affine_body_indices, affine_body_ids, body_com, body_q, body_qd, particle_q, particle_qd
+    )
+
+
+@wp.func
+def _reset_selected_world(world: int, world_mask: wp.array(dtype=wp.bool), world_count: int, reset_all: bool):
+    if reset_all:
+        return True
+    return reset_world_selected(world, world_mask, world_count)
+
+
+@wp.kernel
+def _reset_newton_state(
+    world_mask: wp.array(dtype=wp.bool),
+    reset_all: bool,
+    world_count: int,
+    body_world: wp.array(dtype=wp.int32),
+    particle_world: wp.array(dtype=wp.int32),
+    model_body_q: wp.array(dtype=wp.transform),
+    model_body_qd: wp.array(dtype=wp.spatial_vector),
+    model_particle_q: wp.array(dtype=wp.vec3),
+    model_particle_qd: wp.array(dtype=wp.vec3),
+    body_q: wp.array(dtype=wp.transform),
+    body_qd: wp.array(dtype=wp.spatial_vector),
+    particle_q: wp.array(dtype=wp.vec3),
+    particle_qd: wp.array(dtype=wp.vec3),
+):
+    index = wp.tid()
+    if (body_q or body_qd) and index < body_world.shape[0]:
+        if _reset_selected_world(body_world[index], world_mask, world_count, reset_all):
+            if body_q:
+                body_q[index] = model_body_q[index]
+            if body_qd:
+                body_qd[index] = model_body_qd[index]
+    if (particle_q or particle_qd) and index < particle_world.shape[0]:
+        if _reset_selected_world(particle_world[index], world_mask, world_count, reset_all):
+            if particle_q:
+                particle_q[index] = model_particle_q[index]
+            if particle_qd:
+                particle_qd[index] = model_particle_qd[index]
+
+
+@wp.kernel
+def _reset_cable_history(
+    world_mask: wp.array(dtype=wp.bool),
+    reset_all: bool,
+    world_count: int,
+    cable_joints: wp.array(dtype=wp.int32),
+    joint_world: wp.array(dtype=wp.int32),
+    rebaseline_mask: wp.array(dtype=wp.bool),
+    sigma_prev: wp.array(dtype=wp.vec3),
+    kappa_prev: wp.array(dtype=wp.vec3),
+    dkappa_prev: wp.array(dtype=wp.vec3),
+    sigma_start: wp.array(dtype=wp.vec3),
+    friction_hessian: wp.array(dtype=wp.vec3),
+    penalty_reset_mask: wp.array(dtype=wp.int32),
+):
+    index = wp.tid()
+    if index < world_count + 1:
+        world = index
+        if index == world_count:
+            world = -1
+        if _reset_selected_world(world, world_mask, world_count, reset_all):
+            rebaseline_mask[index] = True
+    if index < cable_joints.shape[0]:
+        joint = cable_joints[index]
+        selected = _reset_selected_world(joint_world[joint], world_mask, world_count, reset_all)
+        penalty_reset_mask[index] = wp.int32(selected)
+        if selected:
+            # Curvature is sampled again from the next input pose, after reset-time FK or edits.
+            sigma_prev[joint] = wp.vec3(0.0)
+            kappa_prev[joint] = wp.vec3(0.0)
+            dkappa_prev[joint] = wp.vec3(0.0)
+            sigma_start[joint] = wp.vec3(0.0)
+            friction_hessian[joint] = wp.vec3(0.0)
+
+
+@wp.kernel
+def _gather_cable_parameters(
+    cable_joints: wp.array(dtype=wp.int32),
+    joint_enabled: wp.array(dtype=wp.bool),
+    joint_kb_rest: wp.array(dtype=wp.vec3),
+    joint_twist_rest: wp.array(dtype=wp.float32),
+    joint_sigma_start: wp.array(dtype=wp.vec3),
+    joint_C_fric: wp.array(dtype=wp.vec3),
+    cable_enabled: wp.array(dtype=wp.int32),
+    cable_rest: wp.array(dtype=wp.vec3),
+    cable_bias: wp.array(dtype=wp.vec3),
+    cable_hessian: wp.array(dtype=wp.vec3),
+):
+    cable = wp.tid()
+    joint = cable_joints[cable]
+    kb = joint_kb_rest[joint]
+    cable_enabled[cable] = wp.int32(joint_enabled[joint])
+    cable_rest[cable] = wp.vec3(kb[0], kb[1], joint_twist_rest[joint])
+    cable_bias[cable] = joint_sigma_start[joint]
+    cable_hessian[cable] = joint_C_fric[joint]
+
+
+@wp.kernel
+def _sync_fixed_affine_body_state(
+    affine_body_indices: wp.array(dtype=wp.vec4i),
+    affine_body_ids: wp.array(dtype=wp.int32),
+    fixed_affine_body_flags: wp.array(dtype=wp.int32),
+    rotation_locked_affine_body_flags: wp.array(dtype=wp.int32),
+    body_com: wp.array(dtype=wp.vec3),
+    body_q: wp.array(dtype=wp.transform),
+    dt: float,
+    particle_q: wp.array(dtype=wp.vec3),
+    particle_qd: wp.array(dtype=wp.vec3),
+):
+    affine = wp.tid()
+    fixed = fixed_affine_body_flags[affine] != 0
+    if not fixed and rotation_locked_affine_body_flags[affine] == 0:
+        return
+    body = affine_body_ids[affine]
+    indices = affine_body_indices[affine]
+    pose = body_q[body]
+    rotation = wp.transform_get_rotation(pose)
+    origin = wp.transform_point(pose, body_com[affine])
+    axis_x = wp.quat_rotate(rotation, wp.vec3(1.0, 0.0, 0.0))
+    axis_y = wp.quat_rotate(rotation, wp.vec3(0.0, 1.0, 0.0))
+    axis_z = wp.quat_rotate(rotation, wp.vec3(0.0, 0.0, 1.0))
+    for corner in range(4):
+        if corner == 0 and not fixed:
+            continue
+        particle = indices[corner]
+        current = origin
+        if corner == 1:
+            current = axis_x
+        elif corner == 2:
+            current = axis_y
+        elif corner == 3:
+            current = axis_z
+        # Contact friction needs the prescribed surface displacement even though
+        # inactive proxies must retain their newly authored positions in the solve.
+        particle_qd[particle] = (current - particle_q[particle]) / dt
+        particle_q[particle] = current
+
+
+@wp.kernel
+def _mask_joint_drive_reset(
+    body_mask: wp.array(dtype=wp.int32),
+    affine_body_ids: wp.array(dtype=wp.int32),
+    drive_bodies: wp.array(dtype=wp.vec2i),
+    angle_initialized: wp.array(dtype=wp.int32),
+    drive_mask: wp.array(dtype=wp.int32),
+):
+    drive = wp.tid()
+    bodies = drive_bodies[drive]
+    selected = body_mask[affine_body_ids[bodies[1]]] != 0
+    if bodies[0] >= 0:
+        selected = selected or body_mask[affine_body_ids[bodies[0]]] != 0
+    drive_mask[drive] = int(selected)
+    if selected:
+        angle_initialized[drive] = 0
 
 
 @wp.kernel
@@ -350,7 +613,7 @@ def _clear_fixed_affine_body_velocities(
     particle_qd[particle_indices[3]] = wp.vec3(0.0)
 
 
-class NewtonSolver(_newton.solvers.SolverBase):
+class NewtonSolver(_newton.solvers.SolverBase, CouplingInterface):
     """Expose the native Style3D Sim solver through Newton's solver interface.
 
     The adapter passes Newton-owned Warp CUDA arrays to Style3D Sim as non-owning
@@ -360,7 +623,9 @@ class NewtonSolver(_newton.solvers.SolverBase):
     cloth, dynamic affine bodies, and rigid and soft contacts from Newton's
     collision pipeline.
     Newton ball, revolute, prismatic, fixed, free, and equivalent D6 joints are
-    assembled from affine-body point-point and point-line constraints.
+    assembled from affine-body point-point and point-line constraints. Cable
+    joints retain their stretch, shear, discrete bend/twist, and Dahl materials
+    in both the Newton and projective-dynamics frameworks.
     Joint controls and Newton collision-pipeline contacts are passed to the
     native backend. Native work uses Newton's active CUDA stream and can
     therefore participate in graph capture.
@@ -418,9 +683,11 @@ class NewtonSolver(_newton.solvers.SolverBase):
         self._joint_drive_feedback_dt: float | None = None
         self._joint_drive_feedback_previous_angles: Any | None = None
         self._joint_drive_feedback_angle_initialized: Any | None = None
+        self._joint_drive_reset_mask: Any | None = None
         self._joint_drive_feedback_scratch: Any | None = None
         self._joint_drive_start_velocities: Any | None = None
         active_joint_drive_body_ids = self._find_active_joint_drive_body_ids()
+        self._joint_drive_armature = float(joint_drive_armature)
         self._pre_regularized_body_ids: set[int] = set()
         self._ensure_affine_body_proxies(
             armature=float(joint_drive_armature),
@@ -549,6 +816,8 @@ class NewtonSolver(_newton.solvers.SolverBase):
             dtype=wp.int32,
             device=model.device,
         )
+        self._rotation_locked_affine_body_ids: list[int] = []
+        self._rotation_locked_affine_body_flags = wp.zeros(affine_body_count, dtype=wp.int32, device=model.device)
         self._fixed_affine_bodies = (
             None
             if not self._fixed_affine_body_ids
@@ -570,12 +839,18 @@ class NewtonSolver(_newton.solvers.SolverBase):
             line_half_length=float(joint_line_half_length),
             drive_armature=float(joint_drive_armature),
         )
+        self._assemble_cable_constraints()
+        self._prepare_affine_inertial_refresh()
         self._validate_model()
         self._configure_shared_world_layout()
 
         self._particle_indices: Any | None = None
         self._synreal_model = Model()
-        self._native_solver = Solver()
+        # Host array reads may restore a different current CUDA context. Native
+        # Thrust buffers must be allocated in the Newton model's device context.
+        with wp.ScopedDevice(model.device):
+            self._native_solver = Solver()
+        self._rigid_contact_capacity = 0
         self._initialize_native_solver()
         # Keep the Python angle branch in lockstep with native joint-drive
         # state even while public effort telemetry is disabled.  This makes
@@ -589,6 +864,8 @@ class NewtonSolver(_newton.solvers.SolverBase):
         self._shared_world_count = 1
         self._shared_counts: dict[str, int] = {}
         self._shared_shape_arrays: dict[str, Any] = {}
+        if self._cable_count:
+            return
         # Material selections use global Newton indices; preserve them and let the
         # native hash queries isolate worlds using particle_world.
         if any(
@@ -891,6 +1168,10 @@ class NewtonSolver(_newton.solvers.SolverBase):
                         self.model.joint_damping,
                         self.model.joint_armature,
                         self.model.joint_effort_limit,
+                        self.model.joint_limit_lower,
+                        self.model.joint_limit_upper,
+                        self.model.joint_limit_ke,
+                        self.model.joint_limit_kd,
                     )
                 )
             ):
@@ -1010,6 +1291,31 @@ class NewtonSolver(_newton.solvers.SolverBase):
         """Return the mutable native configuration used by subsequent steps."""
         return self._native_solver.config
 
+    def prepare_contacts(self, contacts: Any | None) -> None:
+        """Reserve native hard-contact storage for a collision buffer before capture.
+
+        Use the actual pipeline buffer, including proxy-local buffers in coupled
+        simulations: their capacity can exceed the model's initial estimate.
+        Repeated calls with an already prepared capacity are capture-safe.
+        """
+        if contacts is None:
+            return
+        self._reserve_rigid_contact_capacity(int(contacts.rigid_contact_max))
+
+    def _reserve_rigid_contact_capacity(self, capacity: int) -> None:
+        if capacity < 0:
+            raise ValueError("Newton rigid contact capacity cannot be negative.")
+        if capacity <= self._rigid_contact_capacity:
+            return
+        if self._wp.get_stream(self.device).is_capturing:
+            raise RuntimeError(
+                "Call NewtonSolver.prepare_contacts(contacts) before CUDA graph capture: "
+                f"contact capacity {capacity} exceeds the reserved capacity {self._rigid_contact_capacity}."
+            )
+        with self._wp.ScopedDevice(self.device):
+            self._native_solver.reserve_rigid_contact_capacity(capacity)
+        self._rigid_contact_capacity = capacity
+
     def enable_joint_drive_feedback(self) -> Any:
         """Enable recording of the pre-integration motor effort for each step.
 
@@ -1047,6 +1353,7 @@ class NewtonSolver(_newton.solvers.SolverBase):
         self._joint_drive_feedback_angle_initialized = self._wp.zeros(
             drive_count, dtype=self._wp.int32, device=self.device
         )
+        self._joint_drive_reset_mask = self._wp.empty(drive_count, dtype=self._wp.int32, device=self.device)
         self._joint_drive_feedback_scratch = self._wp.empty(
             dof_count, dtype=self._wp.float32, device=self.device
         )
@@ -1222,9 +1529,9 @@ class NewtonSolver(_newton.solvers.SolverBase):
         body_masses = model.body_mass.numpy()
         body_inertias = model.body_inertia.numpy()
         body_centers_of_mass = model.body_com.numpy()
-        dynamic_flag = int(_newton.BodyFlags.DYNAMIC)
+        proxy_flags = int(_newton.BodyFlags.DYNAMIC | _newton.BodyFlags.KINEMATIC)
         body_ids = [
-            body for body, flags in enumerate(body_flags) if int(flags) & dynamic_flag
+            body for body, flags in enumerate(body_flags) if int(flags) & proxy_flags
         ]
         proxy_worlds = [int(body_worlds[body]) for body in body_ids]
 
@@ -1257,17 +1564,20 @@ class NewtonSolver(_newton.solvers.SolverBase):
 
         for body in body_ids:
             mass = float(body_masses[body])
-            if not np.isfinite(mass) or mass <= 0.0:
+            if not np.isfinite(mass) or mass < 0.0:
                 raise ValueError(
-                    f"Dynamic body {body} must have positive mass before creating affine proxies."
+                    f"Dynamic body {body} must have non-negative mass before creating affine proxies."
                 )
-            proxy_inertia = np.asarray(body_inertias[body], dtype=np.float64)
+            # A prescribed endpoint remains represented in the cable topology,
+            # but the inactive proxy's mass is only a nonsingular placeholder.
+            proxy_mass = mass if mass > 0.0 else 1.0
+            proxy_inertia = np.asarray(body_inertias[body], dtype=np.float64) if mass > 0.0 else np.eye(3)
             if body in armature_body_ids:
                 # Generate both proxy geometry and coupled mass from the same
                 # regularized inertia. Keeping these consistent gives driven
                 # articulations substantially better nonlinear convergence.
                 proxy_inertia = proxy_inertia + armature * np.eye(3)
-            mass_matrix = ModelBuilder._proxy_mass_matrix(body, mass, proxy_inertia)
+            mass_matrix = ModelBuilder._proxy_mass_matrix(body, proxy_mass, proxy_inertia)
             transform = np.asarray(body_transforms[body], dtype=np.float64)
             rotation = np.asarray(
                 wp.quat_to_matrix(wp.quat(*transform[3:7])), dtype=np.float64
@@ -1426,30 +1736,30 @@ class NewtonSolver(_newton.solvers.SolverBase):
                     non_diagonal_indices.append((indices[first], indices[second]))
                     non_diagonal_values.append(value)
 
-        model.synreal_particle_mass_diagonal = wp.array(
+        object.__setattr__(model, "synreal_particle_mass_diagonal", wp.array(
             mass_diagonal, dtype=wp.float32, device=device
-        )
-        model.synreal_particle_mass_non_diagonal_indices = wp.array(
+        ))
+        object.__setattr__(model, "synreal_particle_mass_non_diagonal_indices", wp.array(
             non_diagonal_indices, dtype=wp.vec2i, device=device
-        )
-        model.synreal_particle_mass_non_diagonal_values = wp.array(
+        ))
+        object.__setattr__(model, "synreal_particle_mass_non_diagonal_values", wp.array(
             non_diagonal_values, dtype=wp.float32, device=device
-        )
-        model.synreal_affine_body_ids = wp.array(
+        ))
+        object.__setattr__(model, "synreal_affine_body_ids", wp.array(
             body_ids, dtype=wp.int32, device=device
-        )
-        model.synreal_affine_body_indices = wp.array(
+        ))
+        object.__setattr__(model, "synreal_affine_body_indices", wp.array(
             affine_indices, dtype=wp.vec4i, device=device
-        )
-        model.synreal_affine_body_masses = wp.array(
-            body_masses[body_ids], dtype=wp.float32, device=device
-        )
-        model.synreal_affine_body_inertia = wp.array(
+        ))
+        object.__setattr__(model, "synreal_affine_body_masses", wp.array(
+            np.where(body_masses[body_ids] > 0.0, body_masses[body_ids], 1.0), dtype=wp.float32, device=device
+        ))
+        object.__setattr__(model, "synreal_affine_body_inertia", wp.array(
             proxy_inertias, dtype=wp.mat33, device=device
-        )
-        model.synreal_affine_body_com = wp.array(
+        ))
+        object.__setattr__(model, "synreal_affine_body_com", wp.array(
             body_centers_of_mass[body_ids], dtype=wp.vec3, device=device
-        )
+        ))
         self._pre_regularized_body_ids = set(body_ids) & armature_body_ids
 
     @staticmethod
@@ -1473,9 +1783,294 @@ class NewtonSolver(_newton.solvers.SolverBase):
         first /= np.linalg.norm(first)
         return first, np.cross(axis, first)
 
+    def _assemble_cable_constraints(self) -> None:
+        """Preserve Newton's four cable material slots and DER rest invariants."""
+        model = self.model
+        joint_types = model.joint_type.numpy()
+        joints = np.flatnonzero(joint_types == int(_newton.JointType.CABLE)).astype(np.int32)
+        self._cable_count = len(joints)
+        self._cable_joints = wp.array(joints, dtype=wp.int32, device=self.device)
+        if not self._cable_count:
+            return
+
+        affine_by_body = {int(body): affine for affine, body in enumerate(self._affine_body_ids.numpy())}
+        parents = model.joint_parent.numpy()
+        children = model.joint_child.numpy()
+        body_indices = []
+        for joint in joints:
+            parent, child = int(parents[joint]), int(children[joint])
+            if child not in affine_by_body or (parent >= 0 and parent not in affine_by_body):
+                raise NotImplementedError(f"Cable joint {joint} requires affine proxies for both endpoints.")
+            body_indices.append((-1 if parent < 0 else affine_by_body[parent], affine_by_body[child]))
+        starts = model.joint_qd_start.numpy()[joints]
+        stiffness = model.joint_target_ke.numpy()
+        damping = model.joint_target_kd.numpy()
+        self._cable_body_indices = wp.array(body_indices, dtype=wp.vec2i, device=self.device)
+        self._cable_parent_transforms = wp.array(model.joint_X_p.numpy()[joints], dtype=wp.transform, device=self.device)
+        self._cable_child_transforms = wp.array(model.joint_X_c.numpy()[joints], dtype=wp.transform, device=self.device)
+        self._cable_stiffnesses = wp.array([stiffness[start:start + 4] for start in starts], dtype=wp.vec4, device=self.device)
+        self._cable_dampings = wp.array([damping[start:start + 4] for start in starts], dtype=wp.vec4, device=self.device)
+        for name in ("_cable_rest", "_cable_bias", "_cable_hessian"):
+            setattr(self, name, wp.zeros(self._cable_count, dtype=wp.vec3, device=self.device))
+        self._cable_enabled = wp.zeros(self._cable_count, dtype=wp.int32, device=self.device)
+        self._cable_penalty_reset_mask = wp.zeros(self._cable_count, dtype=wp.int32, device=self.device)
+
+        joint_count = int(model.joint_count)
+        self._joint_cable_rest_kb = wp.zeros(joint_count, dtype=wp.vec3, device=self.device)
+        self._joint_cable_rest_twist = wp.zeros(joint_count, dtype=wp.float32, device=self.device)
+        self._refresh_cable_rest_bend_twist()
+        for name in ("joint_sigma_prev", "joint_kappa_prev", "_joint_dkappa_prev", "_joint_sigma_start", "_joint_C_fric"):
+            setattr(self, name, wp.zeros(joint_count, dtype=wp.vec3, device=self.device))
+        self._cable_soft_slots = wp.zeros(int(model.joint_dof_count), dtype=wp.int32, device=self.device)
+        vbd_attributes = getattr(model, "vbd", None)
+        self._cable_eps_max = getattr(vbd_attributes, "dahl_eps_max", None)
+        self._cable_tau = getattr(vbd_attributes, "dahl_tau", None)
+        if self._cable_eps_max is None:
+            self._cable_eps_max = wp.zeros(joint_count, dtype=wp.float32, device=self.device)
+        if self._cable_tau is None:
+            self._cable_tau = wp.zeros(joint_count, dtype=wp.float32, device=self.device)
+        self._cable_has_dahl = bool(np.any((self._cable_eps_max.numpy() > 0.0) & (self._cable_tau.numpy() > 0.0)))
+        self._cable_rebaseline_mask = wp.ones(int(model.world_count) + 1, dtype=wp.bool, device=self.device)
+        self._gather_cable_parameters()
+
+    def _refresh_cable_rest_bend_twist(self) -> None:
+        """Recompute DER rest invariants after rest poses or joint frames change."""
+        if not self._cable_count:
+            return
+        model = self.model
+        wp.launch(
+            init_cable_rest_bend_twist,
+            dim=int(model.joint_count),
+            inputs=[model.joint_type, model.joint_parent, model.joint_child, model.joint_X_p, model.joint_X_c, model.body_q],
+            outputs=[self._joint_cable_rest_kb, self._joint_cable_rest_twist],
+            device=self.device,
+        )
+
+    def _gather_cable_parameters(self) -> None:
+        wp.launch(
+            _gather_cable_parameters,
+            dim=self._cable_count,
+            inputs=[self._cable_joints, self.model.joint_enabled, self._joint_cable_rest_kb,
+                    self._joint_cable_rest_twist, self._joint_sigma_start, self._joint_C_fric],
+            outputs=[self._cable_enabled, self._cable_rest, self._cable_bias, self._cable_hessian],
+            device=self.device,
+        )
+
+    def _prepare_cable_dahl(self, state: Any) -> None:
+        model = self.model
+        if self._cable_has_dahl:
+            wp.launch(
+                compute_cable_dahl_parameters,
+                dim=int(model.joint_count),
+                inputs=[model.joint_type, model.joint_enabled, model.joint_world, self._cable_rebaseline_mask,
+                        model.joint_parent, model.joint_child, model.joint_X_p, model.joint_X_c, model.joint_qd_start,
+                        model.joint_target_ke, self._cable_soft_slots, self._joint_cable_rest_kb,
+                        self._joint_cable_rest_twist, state.body_q, self.joint_sigma_prev, self.joint_kappa_prev,
+                        self._joint_dkappa_prev, self._cable_eps_max, self._cable_tau],
+                outputs=[self._joint_sigma_start, self._joint_C_fric],
+                device=self.device,
+            )
+            self._cable_rebaseline_mask.zero_()
+        self._gather_cable_parameters()
+
+    def _update_cable_dahl(self, state: Any) -> None:
+        if not self._cable_has_dahl:
+            return
+        model = self.model
+        wp.launch(
+            update_cable_dahl_state,
+            dim=int(model.joint_count),
+            inputs=[model.joint_type, model.joint_enabled, model.joint_parent, model.joint_child, model.joint_X_p,
+                    model.joint_X_c, model.joint_qd_start, model.joint_target_ke, self._cable_soft_slots,
+                    self._joint_cable_rest_kb, self._joint_cable_rest_twist, state.body_q,
+                    self._cable_eps_max, self._cable_tau],
+            outputs=[self.joint_sigma_prev, self.joint_kappa_prev, self._joint_dkappa_prev],
+            device=self.device,
+        )
+
+    def _prepare_affine_inertial_refresh(self) -> None:
+        """Reserve all mutable column-mass entries before native sparsity is built."""
+        self._affine_mass_pair_slots = None
+        self._affine_inertia_offsets = None
+        self._affine_refresh_com = None
+        self._affine_refresh_linear_mobility = None
+        self._affine_refresh_angular_mobility = None
+        if self._affine_body_ids is None or not len(self._affine_body_ids):
+            return
+        body_ids = np.asarray(self._affine_body_ids.numpy(), dtype=np.int64)
+        self._affine_refresh_com = self.model.body_com.numpy()[body_ids].copy()
+        dynamic = (self.model.body_flags.numpy()[body_ids] & int(_newton.BodyFlags.KINEMATIC)) == 0
+        self._affine_refresh_linear_mobility = dynamic & (self.model.body_inv_mass.numpy()[body_ids] != 0.0)
+        self._affine_refresh_angular_mobility = dynamic & np.any(
+            self.model.body_inv_inertia.numpy()[body_ids] != 0.0, axis=(1, 2)
+        )
+        indices = np.asarray(self._affine_body_indices.numpy(), dtype=np.int64)
+        source_pairs = (
+            np.empty((0, 2), dtype=np.int64)
+            if self._particle_mass_non_diagonal_indices is None
+            else np.asarray(self._particle_mass_non_diagonal_indices.numpy(), dtype=np.int64)
+        )
+        source_values = (
+            np.empty(0, dtype=np.float32)
+            if self._particle_mass_non_diagonal_values is None
+            else np.asarray(self._particle_mass_non_diagonal_values.numpy(), dtype=np.float32)
+        )
+        entries: dict[tuple[int, int], float] = {}
+        for pair, value in zip(source_pairs, source_values):
+            key = tuple(sorted((int(pair[0]), int(pair[1]))))
+            entries[key] = entries.get(key, 0.0) + float(value)
+        column_pairs = []
+        for particles in indices:
+            pairs = [tuple(sorted((int(particles[first]), int(particles[second]))))
+                     for first, second in ((1, 2), (1, 3), (2, 3))]
+            column_pairs.append(pairs)
+            # A zero currently has no force, but its slot must exist when ADMM
+            # later changes an off-diagonal inertia during graph replay.
+            for pair in pairs:
+                entries.setdefault(pair, 0.0)
+        ordered = sorted(entries)
+        slot_by_pair = {pair: slot for slot, pair in enumerate(ordered)}
+        device = self.device
+        self._particle_mass_non_diagonal_indices = wp.array(ordered, dtype=wp.vec2i, device=device)
+        self._particle_mass_non_diagonal_values = wp.array(
+            [entries[pair] for pair in ordered], dtype=wp.float32, device=device
+        )
+        self._affine_mass_pair_slots = wp.array(
+            [[slot_by_pair[pair] for pair in pairs] for pairs in column_pairs], dtype=wp.vec3i, device=device
+        )
+        # Legacy joint-drive armature belongs to the solver metric, so preserve
+        # that fixed offset when the coupler overwrites the physical inertia.
+        authored = np.asarray(self.model.body_inertia.numpy(), dtype=np.float32)[body_ids]
+        current = np.asarray(self._affine_body_inertia.numpy(), dtype=np.float32)
+        offsets = current - authored
+        fixed_flags = self._fixed_affine_body_flags.numpy()
+        locked_flags = self._rotation_locked_affine_body_flags.numpy()
+        for affine in range(len(body_ids)):
+            if fixed_flags[affine] or locked_flags[affine]:
+                offsets[affine] = 0.0
+        self._affine_inertia_offsets = wp.array(offsets, dtype=wp.mat33, device=device)
+
+    def _affine_inertial_refresh_preserves_layout(self) -> bool:
+        """Check eager updates for changes requiring cached weights or masks to be rebuilt."""
+        if self._affine_refresh_com is None:
+            return True
+        body_ids = np.asarray(self._affine_body_ids.numpy(), dtype=np.int64)
+        dynamic = (self.model.body_flags.numpy()[body_ids] & int(_newton.BodyFlags.KINEMATIC)) == 0
+        return (
+            np.array_equal(self.model.body_com.numpy()[body_ids], self._affine_refresh_com)
+            and np.array_equal(
+                dynamic & (self.model.body_inv_mass.numpy()[body_ids] != 0.0), self._affine_refresh_linear_mobility
+            )
+            and np.array_equal(
+                dynamic & np.any(self.model.body_inv_inertia.numpy()[body_ids] != 0.0, axis=(1, 2)),
+                self._affine_refresh_angular_mobility,
+            )
+        )
+
+    def _refresh_affine_mass_properties_device(self) -> None:
+        """Update ADMM mass/inertia metrics without allocations or host reads."""
+        if self._affine_mass_pair_slots is None:
+            return
+        wp.launch(
+            _refresh_affine_body_mass_kernel,
+            dim=len(self._affine_body_ids),
+            inputs=[self.model.body_mass, self.model.body_inertia, self.model.body_com, self._affine_body_ids,
+                    self._affine_body_indices, self._rotation_locked_affine_body_flags, self._affine_inertia_offsets,
+                    self._affine_mass_pair_slots],
+            outputs=[self._particle_mass_diagonal, self._particle_mass_non_diagonal_values, self._affine_body_masses,
+                     self._affine_body_inertia, self._affine_body_com],
+            device=self.device,
+            stream=wp.get_stream(self.device),
+        )
+
+    def _refresh_affine_mass_properties(self) -> None:
+        """Rebuild the coupled proxy metric after body inertia changes outside graph capture."""
+        if self._affine_body_ids is None or not len(self._affine_body_ids):
+            return
+        from .newton_model_builder import ModelBuilder
+
+        body_ids = np.asarray(self._affine_body_ids.numpy(), dtype=np.int64)
+        affine_indices = np.asarray(self._affine_body_indices.numpy(), dtype=np.int64)
+        body_mass = np.asarray(self.model.body_mass.numpy(), dtype=np.float64)[body_ids]
+        body_inertia = np.asarray(self.model.body_inertia.numpy(), dtype=np.float64)[body_ids].reshape((-1, 3, 3))
+        if not np.isfinite(body_mass).all() or np.any(body_mass < 0.0):
+            raise ValueError("Affine body masses must remain finite and non-negative.")
+        # Couplers can assign a positive proximal mass to a disabled body. Its
+        # inverse mass, rather than the authored mass, determines whether it moves.
+        proxy_mass = np.where(body_mass > 0.0, body_mass, 1.0)
+        proxy_inertia = body_inertia.copy()
+        proxy_inertia[body_mass == 0.0] = np.eye(3)
+        body_flags = self.model.body_flags.numpy()[body_ids]
+        rotation_locked = ((body_flags & int(_newton.BodyFlags.PROXY)) != 0) & np.all(body_inertia == 0.0, axis=(1, 2))
+        self._rotation_locked_affine_body_ids = np.flatnonzero(rotation_locked).tolist()
+        self._rotation_locked_affine_body_flags = wp.array(rotation_locked.astype(np.int32), device=self.device)
+        # Coupled articulated proxies can carry translational effective mass and
+        # zero angular mobility. Their inactive affine columns need a valid dummy
+        # metric, while physical dynamic bodies retain the strict inertia checks.
+        proxy_inertia[rotation_locked] = np.eye(3)
+        driven_bodies = self._find_active_joint_drive_body_ids()
+        for affine, body in enumerate(body_ids):
+            if int(body) in driven_bodies:
+                proxy_inertia[affine] += self._joint_drive_armature * np.eye(3)
+
+        mass_diagonal = (
+            self._particle_mass_diagonal if self._particle_mass_diagonal is not None else self.model.particle_mass
+        ).numpy().copy()
+        proxy_particles = set(affine_indices.reshape(-1).tolist())
+        non_diagonal = {}
+        if self._particle_mass_non_diagonal_indices is not None:
+            for pair, value in zip(
+                self._particle_mass_non_diagonal_indices.numpy(), self._particle_mass_non_diagonal_values.numpy()
+            ):
+                if int(pair[0]) not in proxy_particles and int(pair[1]) not in proxy_particles:
+                    non_diagonal[tuple(int(index) for index in pair)] = float(value)
+        for affine, indices in enumerate(affine_indices):
+            mass_matrix = ModelBuilder._proxy_mass_matrix(int(body_ids[affine]), proxy_mass[affine], proxy_inertia[affine])
+            mass_diagonal[indices] = np.diag(mass_matrix)
+            for first, second in combinations(range(4), 2):
+                value = float(mass_matrix[first, second])
+                if value != 0.0:
+                    non_diagonal[(int(indices[first]), int(indices[second]))] = value
+
+        entries = sorted(non_diagonal.items())
+        self._particle_mass_diagonal = wp.array(mass_diagonal, dtype=wp.float32, device=self.device)
+        self._particle_mass_non_diagonal_indices = wp.array(
+            [pair for pair, _ in entries], dtype=wp.vec2i, device=self.device
+        )
+        self._particle_mass_non_diagonal_values = wp.array(
+            [value for _, value in entries], dtype=wp.float32, device=self.device
+        )
+        self._affine_body_masses = wp.array(proxy_mass, dtype=wp.float32, device=self.device)
+        self._affine_body_inertia = wp.array(proxy_inertia, dtype=wp.mat33, device=self.device)
+        self._affine_body_com = wp.array(self.model.body_com.numpy()[body_ids], dtype=wp.vec3, device=self.device)
+        self._fixed_affine_body_ids = self._find_fixed_affine_bodies()
+        fixed = set(self._fixed_affine_body_ids)
+        self._fixed_affine_body_flags = wp.array(
+            [int(affine in fixed) for affine in range(len(body_ids))], dtype=wp.int32, device=self.device
+        )
+        self._fixed_affine_bodies = (
+            wp.array(self._fixed_affine_body_ids, dtype=wp.int32, device=self.device) if fixed else None
+        )
+        self._particle_flags = self._build_particle_flags()
+
+    def _refresh_cable_materials(self) -> None:
+        """Refresh mutable material slots while retaining DER rest shape and Dahl history."""
+        if not self._cable_count:
+            return
+        joints = self._cable_joints.numpy()
+        starts = self.model.joint_qd_start.numpy()[joints]
+        stiffness = self.model.joint_target_ke.numpy()
+        damping = self.model.joint_target_kd.numpy()
+        self._cable_stiffnesses.assign(np.asarray([stiffness[start:start + 4] for start in starts]))
+        self._cable_dampings.assign(np.asarray([damping[start:start + 4] for start in starts]))
+        self._cable_parent_transforms.assign(self.model.joint_X_p.numpy()[joints])
+        self._cable_child_transforms.assign(self.model.joint_X_c.numpy()[joints])
+        self._cable_has_dahl = bool(np.any((self._cable_eps_max.numpy() > 0.0) & (self._cable_tau.numpy() > 0.0)))
+        self._gather_cable_parameters()
+
     def _find_fixed_affine_bodies(self) -> list[int]:
-        """Find affine bodies connected to the world only through fixed joints."""
-        if not getattr(self.model, "joint_count", 0) or self._affine_body_ids is None:
+        """Find prescribed affine bodies and bodies fixed to them or the world."""
+        if self._affine_body_ids is None:
             return []
 
         affine_by_body = {
@@ -1487,7 +2082,12 @@ class NewtonSolver(_newton.solvers.SolverBase):
         joint_children = self.model.joint_child.numpy()
         joint_dof_dims = self.model.joint_dof_dim.numpy()
         joint_enabled = self.model.joint_enabled.numpy()
-        fixed_bodies: set[int] = set()
+        inverse_mass = self.model.body_inv_mass.numpy()
+        body_flags = self.model.body_flags.numpy()
+        fixed_bodies = {
+            body for body in affine_by_body
+            if inverse_mass[body] == 0.0 or int(body_flags[body]) & int(_newton.BodyFlags.KINEMATIC)
+        }
 
         changed = True
         while changed:
@@ -1517,7 +2117,7 @@ class NewtonSolver(_newton.solvers.SolverBase):
 
     def _build_particle_flags(self) -> Any:
         """Return particle flags with fixed-body proxy particles made inactive."""
-        if not self._fixed_affine_body_ids:
+        if not self._fixed_affine_body_ids and not self._rotation_locked_affine_body_ids:
             return self.model.particle_flags
 
         particle_flags = self.model.particle_flags.numpy().copy()
@@ -1527,6 +2127,8 @@ class NewtonSolver(_newton.solvers.SolverBase):
         ].reshape(-1)
         active_flag = int(_newton.ParticleFlags.ACTIVE)
         particle_flags[fixed_particle_indices] &= ~active_flag
+        locked_columns = affine_body_indices[self._rotation_locked_affine_body_ids, 1:].reshape(-1)
+        particle_flags[locked_columns] &= ~active_flag
         return wp.array(
             particle_flags,
             dtype=wp.int32,
@@ -1650,6 +2252,9 @@ class NewtonSolver(_newton.solvers.SolverBase):
 
         for joint in range(int(self.model.joint_count)):
             if not bool(joint_enabled[joint]):
+                continue
+
+            if int(joint_types[joint]) == int(_newton.JointType.CABLE):
                 continue
 
             parent_body = int(joint_parents[joint])
@@ -2450,15 +3055,15 @@ class NewtonSolver(_newton.solvers.SolverBase):
                     "Affine body centers of mass do not match the affine body count."
                 )
 
-            dynamic_flag = int(_newton.BodyFlags.DYNAMIC)
+            proxy_flags = int(_newton.BodyFlags.DYNAMIC | _newton.BodyFlags.KINEMATIC)
             expected_body_ids = [
                 body
                 for body, flags in enumerate(self.model.body_flags.numpy())
-                if int(flags) & dynamic_flag
+                if int(flags) & proxy_flags
             ]
             if affine_body_ids != expected_body_ids:
                 raise ValueError(
-                    "Every dynamic Newton body must have exactly one affine particle proxy mapping in body order."
+                    "Every dynamic or kinematic Newton body must have exactly one affine proxy mapping in body order."
                 )
 
         body_spring_arrays = (
@@ -2581,10 +3186,15 @@ class NewtonSolver(_newton.solvers.SolverBase):
             if any(len(array) != drive_count for array in joint_drive_arrays):
                 raise ValueError("Joint drive arrays have different lengths.")
 
-        for name in ("joint_armature", "joint_damping"):
+        for name in ("joint_armature", "joint_damping", "joint_limit_ke", "joint_limit_kd"):
             values = np.asarray(getattr(self.model, name).numpy())
             if not np.all(np.isfinite(values)) or np.any(values < 0.0):
                 raise ValueError(f"{name} must contain finite non-negative values.")
+
+        lower = self.model.joint_limit_lower.numpy()
+        upper = self.model.joint_limit_upper.numpy()
+        if np.any(np.isnan(lower)) or np.any(np.isnan(upper)) or np.any(lower > upper):
+            raise ValueError("Joint limits must be ordered and not NaN.")
 
         # The scalar-coordinate mapping cannot represent ball-joint inertia or
         # actuation. Free-root armature is ignored by Newton's MuJoCo adapter too.
@@ -2599,7 +3209,7 @@ class NewtonSolver(_newton.solvers.SolverBase):
         stiffness = self.model.joint_target_ke.numpy()
         damping = self.model.joint_target_kd.numpy()
         for joint, (joint_type, start, dims) in enumerate(zip(types, starts, dimensions)):
-            if not enabled[joint] or int(joint_type) == int(_newton.JointType.FREE):
+            if not enabled[joint] or int(joint_type) in (int(_newton.JointType.FREE), int(_newton.JointType.CABLE)):
                 continue
             if int(joint_type) == int(_newton.JointType.D6) and tuple(dims) == (3, 3):
                 continue
@@ -2867,6 +3477,20 @@ class NewtonSolver(_newton.solvers.SolverBase):
         )
         self._synreal_model.body_count = affine_body_count
         self._synreal_model.body_state_count = state_affine_body_count
+        self._synreal_model.cable_count = self._cable_count
+        if self._cable_count:
+            for field, array, dtype in (
+                ("body_indices", self._cable_body_indices, wp.vec2i),
+                ("parent_transforms", self._cable_parent_transforms, wp.transform),
+                ("child_transforms", self._cable_child_transforms, wp.transform),
+                ("stiffnesses", self._cable_stiffnesses, wp.vec4),
+                ("dampings", self._cable_dampings, wp.vec4),
+                ("rest_bend_twist", self._cable_rest, wp.vec3),
+                ("angular_bias", self._cable_bias, wp.vec3),
+                ("angular_hessian", self._cable_hessian, wp.vec3),
+                ("enabled", self._cable_enabled, wp.int32),
+            ):
+                setattr(self._synreal_model, f"cable_{field}", self._as_span(array, self._cable_count, expected_dtype=dtype))
         if affine_body_count:
             self._synreal_model.body_masses = self._as_span(
                 self._affine_body_masses, affine_body_count, expected_dtype=self._wp.float32
@@ -3065,6 +3689,15 @@ class NewtonSolver(_newton.solvers.SolverBase):
             self._synreal_model.joint_armature = self._as_span(
                 self.model.joint_armature, self._synreal_model.joint_dof_count, expected_dtype=self._wp.float32
             )
+            for native_name, model_name in (
+                ("joint_limit_lower", "joint_limit_lower"),
+                ("joint_limit_upper", "joint_limit_upper"),
+                ("joint_limit_stiffnesses", "joint_limit_ke"),
+                ("joint_limit_dampings", "joint_limit_kd"),
+            ):
+                setattr(self._synreal_model, native_name, self._as_span(
+                    getattr(self.model, model_name), self._synreal_model.joint_dof_count, expected_dtype=self._wp.float32
+                ))
 
         shape_count = self._shared_counts.get(
             "shape_count", int(self.model.shape_count)
@@ -3224,7 +3857,11 @@ class NewtonSolver(_newton.solvers.SolverBase):
         # Native initialization copies Style3D coefficients to the host while
         # building the fixed PD matrix, so all preceding Warp work must finish.
         self._wp.synchronize_device(self.device)
-        self._native_solver.initialize(self._synreal_model)
+        with wp.ScopedDevice(self.device):
+            self._native_solver.initialize(self._synreal_model)
+            # Examples capture their first substep. Allocate history before
+            # capture instead of issuing cudaMalloc inside the graph.
+            self._reserve_rigid_contact_capacity(int(getattr(self.model, "rigid_contact_max", 0) or 0))
 
     def _as_synreal_state(self, state: Any) -> State:
         """Wrap a Newton state without taking ownership of its arrays."""
@@ -3268,7 +3905,7 @@ class NewtonSolver(_newton.solvers.SolverBase):
         self._as_span(state.body_q, body_count, expected_dtype=self._wp.transform)
         self._as_span(state.body_qd, body_count, expected_dtype=self._wp.spatial_vector)
 
-    def sync_affine_body_state(self, state: Any) -> None:
+    def sync_affine_body_state(self, state: Any, *, body_mask: Any | None = None) -> None:
         """Update affine proxy positions and velocities from Newton body state.
 
         Call this after ``eval_fk()``, an environment reset, or any direct edit
@@ -3276,6 +3913,10 @@ class NewtonSolver(_newton.solvers.SolverBase):
         and is safe to include in CUDA graph capture. It must not be called
         before every regular step because that would discard the proxy state
         integrated by the native solver.
+
+        ``body_mask`` is an optional int32 CUDA array of shape ``(body_count,)``.
+        Only selected bodies and their joint-angle histories are reset. Mask the
+        preceding FK call too, so surviving environments retain their solver state.
         """
         affine_body_count = (
             0 if self._affine_body_ids is None else len(self._affine_body_ids)
@@ -3294,12 +3935,29 @@ class NewtonSolver(_newton.solvers.SolverBase):
         self._as_span(state.particle_qd, self.model.particle_count, expected_dtype=self._wp.vec3)
 
         stream = self._wp.get_stream(self.device)
-        self._native_solver.reset_joint_drive_state(stream)
-        self._joint_drive_feedback_state = None
-        self._joint_drive_feedback_previous_state = None
-        self._joint_drive_feedback_dt = None
-        if self._joint_drive_feedback_angle_initialized is not None:
-            self._joint_drive_feedback_angle_initialized.zero_()
+        if body_mask is None:
+            self._native_solver.reset_joint_drive_state(stream)
+            self._joint_drive_feedback_state = None
+            self._joint_drive_feedback_previous_state = None
+            self._joint_drive_feedback_dt = None
+            if self._joint_drive_feedback_angle_initialized is not None:
+                self._joint_drive_feedback_angle_initialized.zero_()
+        else:
+            self._as_span(body_mask, self.model.body_count, expected_dtype=self._wp.int32)
+            if tuple(body_mask.shape) != (self.model.body_count,):
+                raise ValueError("body_mask must have shape (body_count,)")
+            if self._joint_drive_types is not None and len(self._joint_drive_types):
+                self._ensure_joint_drive_feedback_angle_state()
+                drive_mask = self._joint_drive_reset_mask
+                self._wp.launch(
+                    _mask_joint_drive_reset, dim=len(self._joint_drive_types),
+                    inputs=[body_mask, self._affine_body_ids, self._joint_drive_body_indices,
+                            self._joint_drive_feedback_angle_initialized],
+                    outputs=[drive_mask], device=self.device, stream=stream,
+                )
+                self._native_solver.reset_joint_drive_state(
+                    stream, self._as_span(drive_mask, len(drive_mask), expected_dtype=self._wp.int32)
+                )
         self._wp.launch(
             _sync_affine_body_state,
             dim=affine_body_count,
@@ -3310,15 +3968,124 @@ class NewtonSolver(_newton.solvers.SolverBase):
                 self._affine_body_com,
                 state.body_q,
                 state.body_qd,
+                body_mask,
             ],
             outputs=[state.particle_q, state.particle_qd],
             device=self.device,
             stream=stream,
         )
 
+    def reset(self, state: Any, world_mask: Any | None = None, flags: Any | None = None) -> None:
+        """Restore selected state fields and rebaseline cable hysteresis.
+
+        ``flags=None`` copies body and particle poses/velocities from model defaults;
+        ``flags=0`` preserves public state. Cable stress and increments are cleared
+        for selected worlds regardless of flags. Cable penalties return to their
+        configured floors. Curvature is rebaselined from the next step's input
+        pose, allowing FK or direct pose edits after this call.
+        Canonical world masks and all device work are safe during CUDA capture.
+        After further body edits, call ``sync_affine_body_state`` before stepping.
+        """
+        if state is None:
+            raise ValueError("'state' argument is required.")
+        model = self.model
+        world_mask = self._normalize_reset_world_mask(world_mask)
+        flags_value = int(_newton.StateFlags.ALL if flags is None else flags)
+        fields = {}
+        for name, flag, count, dtype in (
+            ("body_q", _newton.StateFlags.BODY_Q, int(model.body_count), wp.transform),
+            ("body_qd", _newton.StateFlags.BODY_QD, int(model.body_count), wp.spatial_vector),
+            ("particle_q", _newton.StateFlags.PARTICLE_Q, int(model.particle_count), wp.vec3),
+            ("particle_qd", _newton.StateFlags.PARTICLE_QD, int(model.particle_count), wp.vec3),
+        ):
+            array = getattr(state, name, None) if flags_value & int(flag) else None
+            if array is not None:
+                self._as_span(array, count, expected_dtype=dtype)
+            fields[name] = array
+        reset_dim = max(
+            int(model.body_count) if fields["body_q"] is not None or fields["body_qd"] is not None else 0,
+            int(model.particle_count) if fields["particle_q"] is not None or fields["particle_qd"] is not None else 0,
+        )
+        if reset_dim:
+            wp.launch(
+                _reset_newton_state,
+                dim=reset_dim,
+                inputs=[world_mask, world_mask is None, int(model.world_count), model.body_world, model.particle_world,
+                        model.body_q, model.body_qd, model.particle_q, model.particle_qd],
+                outputs=[fields["body_q"], fields["body_qd"], fields["particle_q"], fields["particle_qd"]],
+                device=self.device,
+            )
+        # A body reset also updates its derived ABD representation. Restrict the
+        # output fields and worlds so unrelated particle state stays untouched.
+        proxy_q = getattr(state, "particle_q", None) if fields["body_q"] is not None else None
+        proxy_qd = getattr(state, "particle_qd", None) if fields["body_qd"] is not None else None
+        body_q = getattr(state, "body_q", None)
+        # A velocity-only reset may omit body poses, leaving no axes for proxy velocities.
+        if (
+            self._affine_body_ids is not None
+            and len(self._affine_body_ids)
+            and body_q is not None
+            and (proxy_q is not None or proxy_qd is not None)
+        ):
+            self._as_span(body_q, int(model.body_count), expected_dtype=wp.transform)
+            if proxy_q is not None:
+                self._as_span(proxy_q, int(model.particle_count), expected_dtype=wp.vec3)
+            if proxy_qd is not None:
+                self._as_span(proxy_qd, int(model.particle_count), expected_dtype=wp.vec3)
+            wp.launch(
+                _sync_selected_affine_body_state,
+                dim=len(self._affine_body_ids),
+                inputs=[self._affine_body_indices, self._affine_body_ids, self._affine_body_com,
+                        body_q, fields["body_qd"] if proxy_qd is not None else None, model.body_world,
+                        world_mask, int(model.world_count), world_mask is None],
+                outputs=[proxy_q, proxy_qd],
+                device=self.device,
+            )
+        if self._cable_count:
+            wp.launch(
+                _reset_cable_history,
+                dim=max(self._cable_count, int(model.world_count) + 1),
+                inputs=[world_mask, world_mask is None, int(model.world_count), self._cable_joints, model.joint_world],
+                outputs=[self._cable_rebaseline_mask, self.joint_sigma_prev, self.joint_kappa_prev,
+                         self._joint_dkappa_prev, self._joint_sigma_start, self._joint_C_fric,
+                         self._cable_penalty_reset_mask],
+                device=self.device,
+            )
+            # Cable models retain unique rows per actual Newton world. The mask
+            # is produced on-device so selected resets remain graph-capturable.
+            self._native_solver.reset_cable_penalty_state(
+                self._wp.get_stream(self.device),
+                self._as_span(self._cable_penalty_reset_mask, self._cable_count, expected_dtype=wp.int32),
+            )
+
+    def coupling_notify_input_state_update(
+        self, state: Any, flags: Any, *, iteration_restart: bool = False, dt: float = 0.0
+    ) -> None:
+        """Refresh local affine proxies after the coupler edits rigid poses or twists."""
+        del iteration_restart, dt
+        if flags & (_newton.StateFlags.BODY_Q | _newton.StateFlags.BODY_QD):
+            self.sync_affine_body_state(state)
+
+    def coupling_supports_full_surface_soft_contacts(self) -> bool:
+        return True
+
+    def coupling_supports_inertial_property_refresh(self) -> bool:
+        """Support ADMM mass/inertia refresh with fixed COM, topology, and mobility.
+
+        Replicated native templates share a mass metric, so heterogeneous
+        proximal updates require one native row set per world.
+        """
+        return self._shared_world_count == 1
+
+    def set_rigid_history_update(self, enabled: bool) -> None:
+        """Control history remapping for the next substep after collision detection."""
+        self._rigid_history_update = bool(enabled)
+
     def _as_synreal_contact(self, contacts: Any | None) -> Contact:
         """Wrap Newton rigid- and soft-contact buffers without taking ownership."""
         native_contact = Contact()
+        native_contact.history_refresh = getattr(self, "_rigid_history_update", True)
+        self._rigid_history_update = True
         if contacts is None:
             return native_contact
 
@@ -3326,7 +4093,12 @@ class NewtonSolver(_newton.solvers.SolverBase):
         if rigid_capacity < 0:
             raise ValueError("Newton rigid contact capacity cannot be negative.")
         if rigid_capacity:
+            if self.config.rigid_contact_hard:
+                self._reserve_rigid_contact_capacity(rigid_capacity)
             native_contact.max_count = rigid_capacity
+            match_index = getattr(contacts, "rigid_contact_match_index", None)
+            if match_index is not None:
+                native_contact.match_index = self._as_span(match_index, rigid_capacity, expected_dtype=self._wp.int32)
             native_contact.count = self._as_span(
                 contacts.rigid_contact_count, 1, expected_dtype=self._wp.int32
             )
@@ -3350,6 +4122,14 @@ class NewtonSolver(_newton.solvers.SolverBase):
                 rigid_capacity,
                 expected_dtype=self._wp.vec3,
             )
+            # Capsule records store centerline points separately from radial
+            # surface offsets. Friction needs the complete surface lever arm.
+            for side in (0, 1):
+                offset = getattr(contacts, f"rigid_contact_offset{side}", None)
+                if offset is not None:
+                    setattr(native_contact, f"offset{side}", self._as_span(
+                        offset, rigid_capacity, expected_dtype=self._wp.vec3
+                    ))
             native_contact.normal = self._as_span(
                 contacts.rigid_contact_normal,
                 rigid_capacity,
@@ -3525,6 +4305,8 @@ class NewtonSolver(_newton.solvers.SolverBase):
                 self._joint_drive_effort.zero_()
             return
 
+        if self._cable_count:
+            self._prepare_cable_dahl(state_in)
         if self._joint_drive_types is not None and len(self._joint_drive_types):
             # The rigid predictor overwrites particle_qd with its secant target.
             # Capture physical joint velocity before that overwrite for both
@@ -3556,6 +4338,7 @@ class NewtonSolver(_newton.solvers.SolverBase):
                     self.model.body_com,
                     self.model.body_mass,
                     self._affine_body_inertia,
+                    self._fixed_affine_body_flags,
                     inertia_mode,
                     dt,
                 ],
@@ -3603,15 +4386,14 @@ class NewtonSolver(_newton.solvers.SolverBase):
                 device=self.device,
                 stream=stream,
             )
-        if affine_body_state_count and self._fixed_affine_bodies is not None:
+        if affine_body_state_count and (self._fixed_affine_body_ids or self._rotation_locked_affine_body_ids):
             self._wp.launch(
-                _clear_fixed_affine_body_velocities,
-                dim=len(self._fixed_affine_body_ids),
-                inputs=[
-                    state_in.particle_qd,
-                    self._affine_body_indices,
-                    self._fixed_affine_bodies,
-                ],
+                _sync_fixed_affine_body_state,
+                dim=affine_body_state_count,
+                inputs=[self._affine_body_indices, self._affine_body_ids, self._fixed_affine_body_flags,
+                        self._rotation_locked_affine_body_flags,
+                        self._affine_body_com, state_in.body_q, dt],
+                outputs=[state_in.particle_q, state_in.particle_qd],
                 device=self.device,
                 stream=stream,
             )
@@ -3656,6 +4438,9 @@ class NewtonSolver(_newton.solvers.SolverBase):
                 stream=stream,
             )
 
+        if self._cable_count:
+            self._update_cable_dahl(state_out)
+
         if self._joint_drive_types is not None and len(self._joint_drive_types):
             # Advance only the continuous-angle branch after integration; public
             # telemetry retains the pre-integration sample above.
@@ -3670,13 +4455,38 @@ class NewtonSolver(_newton.solvers.SolverBase):
             )
 
     def notify_model_changed(self, flags: Any) -> None:
-        """Refresh native views after Newton model arrays are modified."""
-        del flags
+        """Refresh native views after Newton model arrays are modified.
+
+        Eager BODY_INERTIAL_PROPERTIES updates rebuild cached point weights and
+        masks when COM or mobility changes. During graph capture, this flag
+        supports only finite mass/inertia metric updates with fixed COM and
+        mobility, as used by ADMM; other changes require an eager notification
+        and recapture.
+        """
+        capturing = self._wp.get_stream(self.device).is_capturing
+        if int(flags) == int(_newton.ModelFlags.BODY_INERTIAL_PROPERTIES) and self._shared_world_count == 1:
+            # ADMM changes finite mass/inertia without changing ownership or
+            # mobility. Eager COM/mobility edits still require full precompute;
+            # no host reads or allocations may enter the captured metric path.
+            if capturing or self._affine_inertial_refresh_preserves_layout():
+                self._refresh_affine_mass_properties_device()
+                return
+        if capturing:
+            raise RuntimeError("Model changes are not supported during CUDA graph capture.")
+        if flags & (_newton.ModelFlags.BODY_INERTIAL_PROPERTIES | _newton.ModelFlags.BODY_PROPERTIES):
+            self._refresh_affine_mass_properties()
+        if flags & (_newton.ModelFlags.JOINT_PROPERTIES | _newton.ModelFlags.JOINT_DOF_PROPERTIES):
+            self._refresh_cable_materials()
+        if flags & (_newton.ModelFlags.JOINT_PROPERTIES | _newton.ModelFlags.BODY_PROPERTIES):
+            self._refresh_cable_rest_bend_twist()
+            if self._cable_count:
+                self._gather_cable_parameters()
         self._triangle_drag_coefficients = self._extract_triangle_drag_coefficients()
         self._soft_particle_only_shapes = self._extract_particle_only_shapes()
         self._body_distance_constraint_mass_scales = (
             self._normalize_body_distance_constraint_mass_scales()
         )
+        self._prepare_affine_inertial_refresh()
         self._validate_model()
         self._configure_shared_world_layout()
         self._initialize_native_solver()
@@ -3685,6 +4495,7 @@ class NewtonSolver(_newton.solvers.SolverBase):
         self._joint_drive_feedback_dt = None
         self._joint_drive_feedback_previous_angles = None
         self._joint_drive_feedback_angle_initialized = None
+        self._joint_drive_reset_mask = None
         self._joint_drive_feedback_scratch = None
         self._joint_drive_start_velocities = None
         if self._joint_drive_effort is not None:

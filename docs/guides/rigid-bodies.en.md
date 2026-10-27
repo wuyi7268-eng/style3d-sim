@@ -77,6 +77,12 @@ the model supplies drive types, gains, and torque limits.
 `joint_f` is not a position. Prismatic positions use meters and angular targets use radians.
 Calling FK before every step to place bodies at their targets externally forces poses instead of simulating drives.
 
+Scalar angular joints use `joint_limit_lower/upper` (radians) and `joint_limit_ke/kd` for unilateral stops.
+These stops act independently of motor effort limits; finite stiffness permits a small overshoot under load.
+When resetting selected bodies, call `solver.sync_affine_body_state(state, body_mask=mask)` with an int32 CUDA
+array of shape `(model.body_count,)`. Nonzero entries select bodies and their connected joint-angle histories.
+Apply the same selection to the preceding FK update so other environments keep their state.
+
 ## Read Motor Output
 
 ```python

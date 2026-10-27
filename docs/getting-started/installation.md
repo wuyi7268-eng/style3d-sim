@@ -28,11 +28,11 @@ nvidia-smi
 ## 2. 下载仓库
 
 ```bash
-git clone <repository-url> style3d-sim
+git clone https://github.com/Style3D/style3d-sim.git
 cd style3d-sim
 ```
 
-将 `<repository-url>` 替换为仓库 Clone 地址。已经有工作副本时无需重复 clone。
+已经有工作副本时无需重复 clone。
 
 !!! note "公开组件与闭源组件"
     `style3d-sim-bin` 是外部用户使用的公开预编译扩展仓库。

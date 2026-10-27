@@ -79,7 +79,7 @@ examples require the larger `locomotion` dependency group.
 Clone the public repository without recursively fetching the private native source:
 
 ```bash
-git clone <repository-url> style3d-sim
+git clone https://github.com/Style3D/style3d-sim.git
 cd style3d-sim
 ```
 
@@ -258,7 +258,6 @@ uv run python examples/example_basic_shapes.py --solver synreal
 ### Particle and material examples
 
 ```bash
-uv run python examples/example_particles.py
 uv run python examples/example_fluid.py
 uv run python examples/example_snow.py
 uv run python examples/example_granular_beaf.py

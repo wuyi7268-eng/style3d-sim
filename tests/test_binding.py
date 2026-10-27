@@ -200,6 +200,7 @@ def test_config_exposes_runtime_options() -> None:
         s3d.InertiaMode.LIE_GROUP_MIDPOINT,
         s3d.InertiaMode.MIDPOINT_CAYLEY,
         s3d.InertiaMode.NONE,
+        s3d.InertiaMode.VBD_SEMI_IMPLICIT,
     )
     assert config.inertia_mode == s3d.InertiaMode.MIDPOINT_CAYLEY
     assert {mode.name for mode in inertia_modes} == {
@@ -208,6 +209,7 @@ def test_config_exposes_runtime_options() -> None:
         "LIE_GROUP_MIDPOINT",
         "MIDPOINT_CAYLEY",
         "NONE",
+        "VBD_SEMI_IMPLICIT",
     }
     assert tuple(mode.value for mode in inertia_modes) == (
         0,
@@ -215,6 +217,7 @@ def test_config_exposes_runtime_options() -> None:
         2,
         3,
         4,
+        5,
     )
     assert len({mode.value for mode in inertia_modes}) == len(inertia_modes)
     for mode in inertia_modes:

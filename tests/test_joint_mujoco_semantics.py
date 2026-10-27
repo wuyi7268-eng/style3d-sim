@@ -31,6 +31,10 @@ def _make_scene(
     effort_limit=1.0e6,
     torque=0.0,
     guide_half_length=10.0,
+    lower_limit=None,
+    upper_limit=None,
+    limit_ke=None,
+    limit_kd=None,
 ):
     builder = newton.ModelBuilder(up_axis=newton.Axis.Z, gravity=wp.vec3(0.0))
     newton.solvers.SolverMuJoCo.register_custom_attributes(builder)
@@ -52,6 +56,10 @@ def _make_scene(
         target_kd=kd,
         damping=damping,
         armature=armature,
+        limit_lower=lower_limit,
+        limit_upper=upper_limit,
+        limit_ke=limit_ke,
+        limit_kd=limit_kd,
         actuator_mode=newton.JointTargetMode.NONE if mode is None else mode,
     )
     joints.append(joint)

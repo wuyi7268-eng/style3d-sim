@@ -15,7 +15,6 @@
 | 场景 | 脚本 | 说明 |
 | --- | --- | --- |
 | 基本刚体 | `examples/example_basic_shapes.py` | 使用 `--solver synreal`，部分资产会下载 |
-| 直接原生粒子接口 | `examples/example_particles.py` | 使用 `s3d.Solver`；需在同一进程中显式认证 |
 | 流体 | `examples/example_fluid.py` | resolution 控制物理粒子规模，可选表面重建 |
 | 雪/黏结颗粒 | `examples/example_snow.py` | 演示黏结、接触与塑性 |
 | 颗粒切割 | `examples/example_granular_beaf.py` | 文件名沿用仓库的 `beaf` 拼写 |

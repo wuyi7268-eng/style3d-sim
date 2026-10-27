@@ -31,11 +31,11 @@ Internal Windows builds use Visual Studio **Developer PowerShell**; internal Lin
 ## 2. Clone the Repository
 
 ```bash
-git clone <repository-url> style3d-sim
+git clone https://github.com/Style3D/style3d-sim.git
 cd style3d-sim
 ```
 
-Replace `<repository-url>` with the repository's clone URL. Skip this step if you already have a working copy.
+Skip this step if you already have a working copy.
 
 !!! note "Public and private components"
     `style3d-sim-bin` is the public prebuilt-extension repository used by external users.
