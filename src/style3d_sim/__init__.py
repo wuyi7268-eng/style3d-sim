@@ -5,22 +5,28 @@
 
 from typing import Any, Protocol
 
+from ._cuda_runtime import load_cuda_runtime as _load_cuda_runtime
 from .assets import get_asset, get_assets
+
+_cuda_runtime_handle = _load_cuda_runtime()
+
 from ._core import (
     AffineBodyRigidityModel,
     Config,
     Contact,
     Control,
+    InertiaMode,
     JointConstraintMode,
     LogLevel,
     Model,
-    InertiaMode,
     NonlinearSolver,
     Solver,
     Span,
     State,
     is_logged_in,
     login,
+)
+from ._core import (
     set_log_callback as _set_log_callback,
 )
 from .viewer_polyscope import ViewerPolyscope
@@ -48,32 +54,32 @@ def set_log_callback(callback: LogCallback) -> None:
     _set_log_callback(callback)
 
 __all__ = [
-    "configure_fluid",
-    "configure_granular",
     "AffineBodyRigidityModel",
     "Config",
     "Contact",
     "Control",
-    "get_asset",
-    "get_assets",
-    "is_logged_in",
+    "InertiaMode",
     "JointConstraintMode",
     "LogCallback",
     "LogLevel",
-    "login",
     "Model",
     "ModelBuilder",
     "NewtonSolver",
-    "InertiaMode",
     "NonlinearSolver",
     "ParticleSurface",
     "ParticleSurfaceMesh",
     "Solver",
     "Span",
     "State",
-    "set_log_callback",
-    "log_surface_mesh",
     "ViewerPolyscope",
+    "configure_fluid",
+    "configure_granular",
+    "get_asset",
+    "get_assets",
+    "is_logged_in",
+    "log_surface_mesh",
+    "login",
+    "set_log_callback",
 ]
 
 

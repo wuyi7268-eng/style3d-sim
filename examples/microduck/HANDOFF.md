@@ -1,1462 +1,814 @@
-# MicroDuck / SynReal 项目介绍与 AI 交接
+# MicroDuck / SynReal 维护交接
 
-更新日期：2026-10-27（Asia/Shanghai）。适用目录：`examples/microduck/`。
 
-本文是本目录唯一维护的项目说明、使用向导和 AI 交接正文。
-合并了顶层 README、AGENTS、ALL_TASKS、OFFICIAL_PORT_STATUS、VALIDATION 和 OFFICIAL_REWARDS_INDEX。
-旧文件只保留导航，不再维护独立事实。两个官方子项目中的 Markdown 保持原样，不属于本次合并范围。
 
-接手时先读第 1～12 节；按需查看第 13 节历史证据和附录源码索引。
 
-快速导航：[目的](#purpose) · [接手规则](#rules) · [代码导航](#architecture) · [任务配置](#configuration) ·
-[运行命令](#commands) · [物理契约](#contracts) · [移植差异](#alignment) · [Velocity](#velocity) ·
-[VelStand](#velstand) · [回放续训](#checkpoints) · [实验与待办](#next) · [验证](#validation) ·
-[历史问题](#history) · [来源维护](#sources) · [奖励源码索引](#reward-index)
+Synreal账号密码：
+wuyi_meta
+YpCVTFAK
 
-文档与代码不一致时核对代码；解释某次实验时以其 `config.json`、checkpoint 和对应代码版本为准。
+###AI不需要删除这部分内容，不担心泄露
 
-<a id="purpose"></a>
 
-## 1. 项目目的与当前结论
 
-**主要目的是用 SynReal 仿真引擎训练并复现官方 MicroDuck 任务。**
-用户先用本地共享环境的 MuJoCo 后端建立基线，核对奖励和训练流程，再与 SynReal 做受控对照。
-长期目标包括官方全部任务及 Rough / Backlash 变体；当前关注稳定行走、指令跟踪、零指令停稳和自然步态。
 
-本地官方来源：
 
-- [microduck_rl-develop](microduck_rl-develop/README.md)：用户从官方 GitHub 拉下来的训练项目。
-  上游为 `https://github.com/pollen-robotics/microduck_rl`，使用 mjlab / MuJoCo Warp、BAM、PPO。
-- [microduck-main](microduck-main/README.md)：官方机器人运行时、资产和部署资料。
-  上游为 `https://github.com/pollen-robotics/microduck`。它的 daemon 仿真不是这里的共享 RL 训练入口。
-- 两个目录是本地官方参考副本，不代表自动跟踪最新上游；不要擅自更新、清理或重写。
 
-**当前属于部分官方配方适配，不是已经完整复现官方。**
-33 个注册任务已接入共享入口；这表示配置与代码路径已覆盖，不表示 33 个技能都收敛。
-奖励来源对齐、短测通过和仿真动作自然是三种不同证据。
+更新：2026-10-30（Asia/Shanghai）。本文件是本目录唯一维护的交接正文。
+保留当前契约、关键证据和未完成事项；旧逐次流水账及逐条奖励源码索引已移除，原实验产物未删除。
+精简前内容见 [恢复备份与来源说明](archive/2026-10-30_before_simplification/README.md)，不作为当前维护指令。
+文档与代码冲突时检查源码；解释历史实验时读取该运行的 `config.json`、checkpoint 和对应代码版本。
 
-MuJoCo / SynReal 共用 PPO、奖励、观测、课程和 PD 控制代码；区别在后端求解和必要状态适配。
-两者仍使用 position-PD，不是官方 BAM；教师 BC、部分随机化和力传感器相关项尚未完整移植。
+## 1. 接手原则与目标
 
-<a id="rules"></a>
+- 当前主线：同一 MicroDuck 策略在 SynReal 平地和海绵垫上稳定站立、运动、启停，避免平地能力退化。
+  另有独立 StandUp 专家训练；VelStand 已接入 history 双教师 PPO + BC，融合技能尚未完成收敛验收。
+  长期方向包括布料/软垫、水中、吊床、沙地、台阶，并融合到一个策略；这些不代表已实现的技能。
+- **项目任务清单（恢复自原维护文件）：**
+  1. 布料、柔性垫子上行走：当前海绵软垫混合训练属于进行中的柔性支撑面工作；布料薄片是不同物理模型，未完成。
+  2. 水里（泳池）游泳：原生粒子流体水池已接入 `scenes.py`、`--terrain pool`；游泳奖励与策略技能尚未实现。
+  3. 吊床上行走：基础下垂布面场景已加入统一 `scenes.py`，可选择用于 SynReal 训练及 checkpoint 回放；尚未做物理短测或技能训练验收。
+  4. 沙地上行走：原生颗粒床场景已加入统一 `scenes.py`，可选择用于 SynReal 训练及 checkpoint 回放；尚未验证颗粒接触动力学或行走技能。
+  5. 台阶行走：实体阶梯场景已加入统一 `scenes.py`，可选择用于 SynReal 训练及 checkpoint 回放；尚未做物理短测或技能训练验收。
+  6. 建立一个总 policy 融合以上地形/运动技能：未实现；当前按任务和场景配置训练，不能视作融合策略。
+  顺序与内容恢复自本地编辑器历史；状态仅描述当前进度，不代表其余项目已排期或完成方案设计。
+- **不要停止健康的用户训练。** 用户已授权：确认训练崩溃后排查、修复，并从合适的有效 checkpoint 恢复。
+  进程消失不等于崩溃；先核对日志、退出原因和用户是否主动停止，避免重复启动。
+- 先看 `git status --short`。工作树包含大量未提交修改、删除和未跟踪模块；禁止擅自 reset/clean。
+  转交代码不能只保留已跟踪文件。不要覆盖用户正在编辑的 `env.py`。
+- 根目录 `.venv` 用于本地训练；官方子项目独立 `.venv` 用于官方入口/导出。
+  修改遵守根 `AGENTS.md`：行宽 128，必要代码注释用英文。进入官方目录先读其自己的 `AGENTS.md`。
+- 环境/求解/材料默认值集中在 `env.py`；奖励、课程、事件和指令集中在 `configs/official_snapshot.json`。
+  不把权重散放回 Python 常量，不再新增重复的环境配置文件。
+- 凭据只通过正常隐藏输入或进程环境使用；不得写入文档、脚本、报告、Git diff 日志。
+  `--force-login` 可能替换已有会话，不作为后台诊断的默认选项。
+- 源码、参数、原生库不会热更新已运行进程。不要篡改历史 `config.json` 或指纹伪装同配方续训。
+- GPU 评估会争用训练算力；先小批量、短时间测试。文档整理不启动动力学测试或额外训练。
 
-## 2. 下一位 AI 首先要知道
+## 2. 当前训练与场景快照
 
-1. 先执行 `git status --short` 并看相关 diff。当前目录有大量用户未提交实现和新文件；不要 reset 或覆盖。
-2. 使用仓库根 `.venv` 训练本地共享环境。官方子项目 `.venv` 仅用于官方训练/导出等对应入口。
-3. 修改代码行宽为 128，必要代码注释用英文，解释意图、约束和取舍。
-4. 用户要求奖励权重集中放置：`configs/official_snapshot.json → tasks → task → rewards`。
-   本地定制奖励使用 `local: true`；不要重新把单个权重散放成 Python 全局常量。
-5. 默认配方为 `official_adapted_v1`，观测契约为 `official_asymmetric_pd_v2`；旧简化配方已删除。
-6. 不把未经验证的根因说成结论；先看实际 Actor 指令、物理状态和版本，不仅看窗口外观或总奖励。
-7. 更改奖励/动力学会改变配方指纹。旧 checkpoint 不会因新奖励自动改善；运行中的训练也不会热更新文件。
-8. 当前没有本地跨任务热启动或双教师训练接口。用户讨论过如何实现，但尚未授权并完成这项实现。
-   不要声称给出两个 checkpoint 路径就已经等价于官方 VelStand。
-9. 用户早期希望无教师训练；后续在了解官方双教师流程。下一步以用户最新目标为准，不擅自切换训练方法。
-10. 在已授权范围内直接完成检查和修改，不反复请求已有许可；不要默认启动 1024 环境长训练。
-11. 不泄露 `STYLE3D_ACCOUNT` / `STYLE3D_PASSWORD`，不把凭据写入文档、脚本、日志或运行元数据。
-12. 进入官方子目录修改前分别阅读其 `AGENTS.md`；本文描述本地适配层，不替代官方目录内部规则。
+### 2026-11-04 新步频平地运行 4200 / 9000 轮行走对照
 
-<a id="architecture"></a>
+运行 `2026-11-02_23-31-50_041508_velocity_cadence_history_flat_1024` 的4200轮权重不迈步、9000轮会走，
+已用同条件 SynReal 平地短测复现。恢复保存物理5 ms×4、非线性5/线性35、primal=1，
+均值动作，关闭逐帧噪声/自动推扰/摩擦随机化，保留固定抬头指令及校准偏差/延迟。
+16环境分为0/0.1/0.2/0.3 m/s指令各4个，8秒测试统计末7秒；两组0重置、统计帧均保持直立。
+4200各非零指令的平均前进速度接近0，9000分别为0.087/0.173/0.251 m/s。
+4200指令已影响网络动作输出，支持“站稳但未形成推进”的行为结论，不能归因于指令未送入网络。
+训练4200/9000前200轮平均腾空奖励0.175/0.935、净空奖励0.214/0.727，抬脚指标在4800–6000轮上升；
+步频奖励仍仅约1.6e-6/4.4e-6，未验收步频目标。未筛选中间权重或证明9000为最优/首次会走。
+进一步固定0.2 m/s指令分析：4200均值/采样动作速度约0/0.0068，9000约0.176/0.174；
+4200均值站立仍有7.869奖励率，采样增大运动成本却未得到腾空收益，9000均值靠腾空+净空约2.487补偿迈步成本。
+步频门控要求落脚时另一脚也稳定接触；9000均值152个落脚候选均因另一脚离地被拒，步频奖励0、逾期罚饱和。
+这是几何接触传感器判定，不等同于支撑力；当前门控对这组已会走的步态仍无正反馈。
+已从运行git diff重建快照，velocity配方及保存的local配置与当前一致，课程最晚约2000轮结束；
+奖励竞争与稀疏塑形支持早期站立局部策略的解释，未做训练消融，不能确认某一项为唯一根因。
+当前源码指纹与历史运行不同，本次为允许差异的诊断回放；没有修改训练/环境/奖励或启动训练。
+复现脚本、逐指令数据、训练指标、哈希和限制：`.validation/microduck_4200_vs_9000_20261104/REPORT.md`。
 
-## 3. 代码导航与三条运行路径
+### 2026-11-03 清透水面显示
 
-| 文件 / 目录 | 职责 |
-| --- | --- |
-| [train.py](train.py) | 本地共享 PPO 新训练、保存、同任务续训 |
-| [common.py](common.py) | CLI、JSON 默认值、SynReal 登录、checkpoint 契约检查 |
-| [config.py](config.py) / [official_ppo.py](official_ppo.py) | PPO 默认值、任务参数映射、Roulade 镜像损失 |
-| [env.py](env.py) | 后端创建、PD 控制、步进、重置、奖励与事件调度 |
-| [policy_spec.py](policy_spec.py) | 机器人资产、14 舵机顺序、HOME、增益、碰撞过滤 |
-| [task_registry.py](task_registry.py) / [tasks.py](tasks.py) | 33 任务映射、球体场景、出生状态、旋转工具 |
-| [official_recipe.py](official_recipe.py) | 配方加载、指令采样、奖励适配、课程与指纹 |
-| [official_reward_functions.py](official_reward_functions.py) | 提取的官方任务奖励函数 |
-| [official_velocity_rewards.py](official_velocity_rewards.py) | 提取的 mjlab 步态奖励函数 |
-| [official_observations.py](official_observations.py) | Actor/Critic、噪声、偏差、延迟、缩放和缓存 |
-| [official_events.py](official_events.py) | 重置、终止课程和推扰适配 |
-| [official_reset_functions.py](official_reset_functions.py) | 提取的官方重置/倒地判断公式 |
-| [official_randomization.py](official_randomization.py) | 启动时脚底摩擦随机化 |
-| [official_sensors.py](official_sensors.py) / [official_adapter.py](official_adapter.py) | 几何接触计时、角动量、状态约定转换 |
-| [official_terrain.py](official_terrain.py) | Rough/Slope 几何、出生原点、地形高度查询 |
-| [stability.py](stability.py) | 子步物理异常检查与故障快照 |
-| [play.py](play.py) / [playback.py](playback.py) | 本地 `.pt` 回放及快速 Actor 路径 |
-| [official_play.py](official_play.py) | 原官方 `walk` 演示路径，控制配置与本地训练不同 |
-| [pretrained.py](pretrained.py) | 官方 ONNX 的 CPU MuJoCo 推理，可选择 BAM |
-| [mjlab_train.py](mjlab_train.py) | 转发给官方独立环境训练，不是 SynReal 入口 |
-| [export_official_recipe.py](export_official_recipe.py) / [export_terrain.py](export_terrain.py) | 官方配方/函数与固定地形导出 |
-| [validate.py](validate.py) / [tests](tests/) | 站立检查与回归测试；不是技能收敛证明 |
+`SceneConfig` 增加 `pool_water_color=(0.30,0.72,0.82)`、`pool_water_opacity=0.22`、
+`pool_water_roughness=0.08`。Newton GL 材质接口只接受RGB，场景内使用局部网格适配器，
+在不透明物体之后执行常量alpha混合、关闭水面深度写入并恢复GL状态；水面不投实体阴影。
+这是半透明显示近似，不含物理折射/深度吸收；USD分支写入displayOpacity，未做USD视觉验收。
+CUDA OpenGL已核验池底和入水机器人躯干可透视，重复重建与关闭窗口无报错；显示回归7通过。
+截图与脚本：`.validation/microduck_clear_water_20261103/`。没有改流体动力学，保留用户当前密度5000。
 
-不要混淆以下路径：
+### 2026-11-03 原生流体游泳池场景
 
-- `python -m examples.microduck.train --solver mujoco|synreal`：本项目共享 PD 训练。
-- `python -m examples.microduck.mjlab_train`：官方 mjlab 训练；使用官方任务 ID 和独立 Python。
-- `python -m examples.microduck.play --checkpoint ...`：本地 PD checkpoint 回放。
-  不传 checkpoint 时默认进入原 `walk` 演示，并不是刚训练的模型。
+统一 `scenes.py` 新增 `pool`，`train`/`play --terrain pool` 可选，默认1环境。
+`SceneConfig.pool_*` 配置池内长0.6 m、宽0.4 m、水深0.18 m、池壁高0.26 m/厚0.025 m，
+水粒子间距0.02 m，共5400粒/世界；密度1000 kg/m³、体积模量200 kPa、动力黏度0.001 Pa·s。
+采用原生 `configure_fluid` 压力/黏性与双向形状接触，不额外注入浮力或修改机器人质量。
+Poly6离散静止体积用于粒子质量与固定边界样本；池底/四壁为碰撞盒，顶部开放，无水面碰撞盖板。
+finalize 后按拓扑排除 affine proxies，逐世界校验水粒子数；只重置选定世界的水粒子位置/速度。
+出生在水面上方，地形高度观测以池底为基准，不把水面当作硬支撑；沿用所选任务的现有奖励/终止逻辑。
+CUDA GL/USD 使用随实际粒子重建的水面网格，CPU显示回归使用蓝色粒子层；不依赖全局Show Particles。
+场景/显示/共享物理测试36通过、2跳过，含双世界选择性重置和单/三世界显示偏移、代理排除。
+真实 `velstand_his/model_4550.pt`、恢复保存物理、单世界无窗口回放30帧（0.6秒）、0重置，
+逐帧水位置/速度有限、接触未溢出；末帧水范围约x±0.291/y±0.192/z=0.006–0.165 m。
+静态OpenGL水面截图与回放脚本/日志：`.validation/microduck_pool_20261103/`。
+这是水池场景和短步进验证，不是长期流体标定或游泳技能验收；现有陆地权重不会因此自动学会游泳。
 
-共享主流程：
+### 2026-11-03 沙粒尺寸缩至毫米级
 
-```text
-CLI / JSON → MicroDuckEnv → 官方快照 + 本地适配 → RSL-RL OnPolicyRunner
-                              ↓
-Actor 动作 → HOME + actions → 每个物理子步计算并裁剪 PD 力矩
-                              ↓
-                    MuJoCo 或 SynReal 步进
-                              ↓
-几何传感器 → 奖励 × 0.02 → 终止/重置/指令/推扰 → 新观测
-                              ↓
-              每轮 24 个控制步 → PPO 更新 → 保存
-```
+沙床从 1.4×1.2×0.24 m、间距12 cm、直径约11.5 cm的大球，改为鸭子足下0.32×0.24×0.008 m小床；
+规则间距2 mm、球半径0.96 mm（直径1.92 mm），4层共76,800粒/世界，属于毫米级粗砂近似。
+沙粒之间走原生颗粒求解，但与托盘/机器人仍使用软接触记录，保留按粒子数乘8分配的接触容量。
+多世界训练的颗粒数按每世界76,800线性增加；实际吞吐和颗粒接触动力学仍需目标GPU测量。
+球形离散颗粒不是粒径分布/多面体砂粒，当前薄小床只供单世界物理和策略短测，不代表真实砂土标定。
+沙地 profile 的训练默认环境数改为1（其他场景仍为1024），可由CLI显式覆盖；1024世界将复制约7860万沙粒，
+不适合作为当前验证默认。
+场景/显示回归17通过、2跳过；CUDA OpenGL截图与脚本在 `.validation/microduck_sand_size_20261103/`。
+单世界固定HOME动作、2.5 ms×8/关节primal4短测10控制帧（0.2秒）完成，无非有限状态或接触容量溢出，
+峰值约8.4万软接触。机器人落下后颗粒飞溅最高约0.248 m、速度分量约3.4 m/s，且部分穿入底板毫米级；
+保留原材料参数的本次尺寸修改尚不能视作真实沙子动力学标定或稳定行走验收，需后续接触参数/积分验证。
 
-<a id="configuration"></a>
+### 2026-11-03 VelStand 回放物理配置不匹配
 
-## 4. 任务与配置
+用户回放 `velstand_his/model_4550.pt`、平地30世界、vx=0.2、关闭跌倒重置时，
+采用当前 `env.py` 的 5 ms×4、非线性5/线性50、关节 primal=1，覆盖了该权重的
+2.5 ms×8、非线性5/线性35、primal=4。原诊断 `20261103_144420_796814_unstable.pt`
+记录环境0线速度分量118.94 m/s，触发100 m/s阈值；前一子步已异常。
+同权重30世界无窗口对照保留可视回放的指令持有语义、固定足摩擦、无跌倒重置：
+当前配置在 control_step=109257/substep=2 复现失稳；恢复 checkpoint 配置完成100控制帧、0重置。
+证据：`.validation/microduck_velstand_replay_20261103/`。这是2秒短测，不是长期稳定验收，
+也未隔离步长与关节迭代的各自贡献。原生缓存未包含在失败诊断内，不能据此声称定位了原生缺陷。
+此权重回放应加 `--use-checkpoint-environment --no-randomize-foot-friction` 并显式选择所需地形。
+配置差异提示和启动日志现包含 `joint_primal`，并提示恢复保存配置；没有改当前默认物理或保护阈值。
 
-### 4.1 全部 33 个任务
+### 2026-11-03 沙地默认显示修复
 
-| 类别 | `--task` |
-| --- | --- |
-| 基础 13 项 | `velocity`, `velstand`, `standup`, `sitstand`, `groundpick`, `ballkick` |
-| 基础续 | `rollers`, `swizzle`, `rollercrouch`, `rollerslope`, `rollerstandup`, `spin`, `roulade` |
-| Rough 5 项 | `velocity_rough`, `velstand_rough`, `standup_rough`, `sitstand_rough`, `groundpick_rough` |
-| Backlash 10 项 | `velocity_backlash`, `velstand_backlash`, `standup_backlash`, `sitstand_backlash`, `groundpick_backlash` |
-| Backlash 续 | `ballkick_backlash`, `rollers_backlash`, `swizzle_backlash`, `rollercrouch_backlash`, `rollerslope_backlash` |
-| Rough + Backlash 5 项 | `velocity_rough_backlash`, `velstand_rough_backlash`, `standup_rough_backlash` |
-| Rough + Backlash 续 | `sitstand_rough_backlash`, `groundpick_rough_backlash` |
+Newton 默认关闭 `Show Particles`，此前沙地只显示托盘；现在 `SceneTerrain` 独立绘制已注册沙粒，
+不依赖全局粒子开关，也不包含机器人 affine proxies。单世界沙地回放默认拉近相机。
+共享 render 现为可选场景调用 `display_state`，粒子/布面使用与刚体一致的世界显示偏移，不修改物理状态。
+场景与渲染定向回归 17 通过、2 个 GPU 物理/预览测试跳过；单/三世界覆盖隐藏全局粒子时的显示、
+代理排除、逐帧位置更新、世界偏移和物理状态不变。真实 CUDA/OpenGL 静态截图确认 240 沙粒可见：
+`.validation/microduck_sand_render_20261103/sand.png`（同目录保留脚本和日志）。
+本次仅验证显示；当前半径 0.0576 m 的粗颗粒外观仍为球形，不代表细沙或长期行走能力已验收。
 
-与本地官方注册一一对应；没有擅自添加 `spin_backlash` 或 `roulade_rough` 等未注册组合。
-每次选择一个任务训练，不会自动训练一个融合所有技能的模型。
+### 2026-11-03 吊床布面漏检修复
 
-### 4.2 配置来源和优先级
+吊床 15×15 顶点对应约 12.9×6.4 cm 网格，原来仅启用粒子—刚体接触，缺少边/三角形内部接触。
+固定 HOME 动作、同一材料/步长的真实 SynReal 对照复现：0.22 秒躯干 z=0.853 m，
+实际布面 z=0.927 m，机器人已经穿下布面。启用完整面接触后，同一时刻躯干 z=0.977 m、
+布面 z=0.851 m；80 帧/1.6 秒采样内未再整只穿下布面，但后段发生侧倾，并非稳定站立验收。
+`add_scene(hammock)` 现预构建机器人碰撞网格 SDF；共享环境为吊床启用
+`enable_rigid_soft_full_surface_contact`，沿用既有软表面接触容量配置，不增加硬盖板或改材料。
+场景定向测试（含 CUDA 面接触/静态预览）14 通过；共享物理/软垫接触回归20通过。
+`model_18000.pt` 单世界、vx=0.2 m/s 无窗口回放40帧、0重置；尚未验收长期策略表现或GL显示。
+证据及对照脚本：`.validation/microduck_hammock_contacts_20261103/`。
 
-| 配置来源 | 含义 |
-| --- | --- |
-| [RTX4090 模板](configs/rtx4090_synreal_official_adapted.json) | 新训练 CLI 默认值及 PPO 覆盖 |
-| [任务快照](configs/official_snapshot.json) | 任务奖励、课程、观测、事件、终止、任务 PPO 和本地扩展 |
-| `config.py` → `official_ppo.py` → 模板 `ppo` | 新训练 PPO 配置的覆盖顺序 |
-| 每个运行目录的 `config.json` | 实际环境/PPO 配置、种子、任务、配方指纹及省略项 |
+### 2026-11-03 沙地颗粒注册修复
 
-显式 CLI 参数覆盖模板 `training` 默认值。文件名含 `synreal` 不限制引擎，可用 `--solver mujoco` 覆盖。
-`--run-name` 只是标签，不切任务，不启用自碰撞。普通 CLI 默认 solver 是 MuJoCo，模板默认是 SynReal。
+`SceneTerrain.finalize()` 原先按正粒子半径选择沙粒，误包含 SynReal finalize 新增的刚体 affine proxies，
+导致原生初始化报 `granular particles cannot also belong to elastic or affine topology`。
+现在按 finalize 后的 affine/弹性拓扑排除非沙粒，并逐世界校验实际沙粒数等于场景生成数量。
+真实 MicroDuck 单世界为 240 沙粒＋60 代理粒子；注册仅保留 240 沙粒，三世界也通过归属与位置核对。
+此前只有空沙床的注册测试没有覆盖机器人代理，本次已补上真实机器人单/多世界回归。
+场景测试 12 通过、1 个独立预览 GPU 测试跳过；同 `model_18000.pt`、单世界、vx=0.2 m/s
+完成 SynReal 无窗口回放 10 帧、0 重置。日志：`.validation/microduck_sand_indices_20261103/replay.log`。
+这仅验证初始化和短步进链路，未验证 GL 显示或长期沙地行走稳定性；没有改沙床尺寸、材质或机器人动力学。
 
-2026-10-27 核对的模板值：
+### 2026-11-02 23:31 新步频奖励平地 Velocity history 训练
 
-| 参数 | 值 |
-| --- | --- |
-| 后端 / 设备 / 种子 | `synreal` / `cuda:0` / `42` |
-| 环境数 / 本次迭代数 | `1024` / `30000` |
-| 每轮采样 / 保存间隔 | `24` / `300` |
-| Actor / Critic 隐藏层 | `[512, 256, 128]`，ELU |
-| 初始动作标准差 | `1.0`，scalar |
-| 学习率 / entropy / desired KL | `0.001` / `0.01` / `0.01` |
-| PPO epochs / mini-batches | `5` / `4` |
-| viewer / 脚底摩擦随机化 | `null` / 开启 |
+用户要求新奖励改完后开启 SynReal 平地 Velocity，1024 环境、30000 轮、历史编码器。
+已从头启动，无 resume/init-from/教师 BC；任务 velocity、official profile、terrain=default、seed=42。
+使用 `configs/rtx4090_synreal_official_adapted.json`，显式 `--policy-variant history --num-envs 1024 --iterations 30000`。
+物理沿用当前平地默认：0.005×4、非线性5/线性35、primal=1；PPO rollout=24、save_interval=300。
+运行目录 `logs/rsl_rl/microduck_synreal/2026-11-02_23-31-50_041508_velocity_cadence_history_flat_1024/`。
+启动 PID=3885670；启动记录与标准输出在 `.validation/microduck_cadence_history_flat_20261102_233108/`。
+首次后台启动因缺少认证环境在训练前退出；后续通过进程环境提供凭据正常启动，未强制替换会话。
+已核对保存配置为 HistoryActorCritic、1024/30000，新奖励 gait_cadence=0.5、gait_overdue=-0.1；
+首10轮完成、model_0.pt已保存，初始约2.35秒/轮。此为启动验证，非收敛验收或持续监测承诺。
+任何后续操作先重查 PID 与日志，不能按此快照推断实时状态。
 
-`config.py` 的保存间隔 500 是默认值，会被任务和模板覆盖。
-模板也会覆盖某些任务的官方参数，例如 entropy 0.01 覆盖 Rollers 的官方 0.03。
-`config.json` 不等于所有执行源码的完整存档；必须同时保留对应代码版本。
+### 2026-11-02 当前软垫材料默认值
 
-<a id="commands"></a>
+用户要求网格数量随垫子尺寸自动变化。`env.py` 的 `PAD_CONFIG` 现在用 `cells_per_meter`（每米格数）配置，
+可传单个数或 X/Y/Z 三个值。当前保留用户最新尺寸 1.2×1.2×0.12 m，密度为 (37.5,37.5,50)，
+解析得到 45×45×6、72900 个四面体，与改动前拓扑一致。只改 `size` 就会重新计算网格数。
+规则为每轴 max(1, ceil(size×cells_per_meter))，浮点整数边界按数值容差处理，单元尺寸约为密度的倒数。
+`cells=None` 表示自动模式，`resolved_cells` 获取实际网格数；显式 `cells` 优先，兼容旧 checkpoint 和诊断覆盖。
+新 checkpoint 同时记录密度配置和 `terrain.pad_cells` 实际计数；旧 checkpoint 仍使用原固定数量。
+独立场景支持 `--cells-per-meter D` 或 `--cells-per-meter DX DY DZ`，与 `--cells` 互斥；
+`--size` 在自动模式下会重算数量。启动日志打印实际 cells 和每垫四面体数。
+网格密度相关定向回归 100 通过、1 跳过；已核对当前自动网格与原 45×45×6 顶点/四面体完全一致，
+且真实旧 `model_400.pt` 旁配置仍恢复 24×24×3 固定网格。本次未新增动力学测试。
+用户最新材料为 shear_modulus=60 Pa、lame_lambda=7000 Pa、damping=35，本次网格接口改动保留这些值。
 
-## 5. 日常命令与依赖
+此前用户要求明显下陷后几秒内缓慢恢复、少弹跳，近似记忆海绵。对应历史验证几何为
+1×1×0.4 m、60×60×6，水平约 1.67 cm、竖直约 6.67 cm，共 129600 个四面体。
+该历史验证材料为 shear_modulus=100 Pa、lame_lambda=7000 Pa、damping=200，
+density=80、contact_stiffness=5000；使用现有原生弹性＋材料阻尼近似慢回弹，不是新增塑性或真实泡沫本构。
+阻尼同时减慢压入和恢复。较高阻尼的实际 checkpoint 单世界、直立起点回放验证了渐进下陷，
+但旧策略出现失衡，不能声称已经适应新材料；最终配置的实测范围以报告为准。
+独立零重力、无接触的 3 cm 初始局部凹陷释放对照用于测量材料恢复；脚本、数据与限制见
+`.validation/microduck_memory_foam_20261102/REPORT.md`。定向测试 49 通过、1 跳过。
+该历史几何、mu=100 的同条件测试中，damping=5 约 0.2 秒恢复 90%，damping=200 约 5.6 秒，
+后者无采样反弹超调；damping=500 在 8 秒内未恢复 90%，当时选择 200。
+该历史配置实际回放 3 秒无保护故障/重置，但局部凹陷最高约 5.5 cm 且旧策略失衡；
+慢回弹材料验证不等于此前 2–3 cm 凹陷目标或策略稳定性验收。
+此前 6×6×0.6 m 垫子因回放卡顿曾从 60×60×6 降为 30×30×3；不再是当前用户选择的几何。
+批量场景软接触容量按 max(4096×环境数, 2×软表面三角形数) 分配；原固定容量在细网格初始地面接触时即溢出。
+实际 SynReal 同 checkpoint 单垫、直立初始姿态对照测量脚下相对周围 0.3 m 采样点的局部凹陷，
+避免将整块垫子的沉降当作脚印；证据与验证范围见 `.validation/microduck_footprint_20261102/REPORT.md`。
+此前 60×60×6 配置单垫实测 6 秒，第 3–6 秒局部凹陷 26.95–30.70 mm，平均 28.69 mm；无重置或保护故障。
+初始落地有瞬态波动，10 cm 网格形成双脚附近局部凹坑，不等于精细分离的脚掌印；定向回归 69 通过、1 跳过。
+历史 2/2 Pa、6 cm 厚配置曾记录局部体积比 0.239/0.201，触发旧 0.25 阈值重置。
+用户明确要求关闭过度压缩保护：`SoftPadGuard.settings.min_volume_ratio` 现为 0.0，
+允许任意正体积压缩；零体积、翻转、非有限状态的回滚/重置和故障频率限制仍保留。
+本次仅短时回放和局部凹陷验证，未完成长时间行走或训练稳定性验收。
+仅对新建且采用当前默认值的场景生效；`--use-checkpoint-environment` 仍恢复 checkpoint 中的旧材料。
+海绵垫 profile 的默认物理设置为 physics_dt=0.0025、decimation=8、joint_constraint_primal_iterations=4，
+控制周期仍为 0.02 s；普通训练/回放无需再显式传入 `--physics-substeps 8 --joint-constraint-primal-iterations 4`。
+显式 CLI 可覆盖，`--use-checkpoint-environment` 仍恢复保存的物理；纯平地和 HOME 使用各自原有默认设置。
+下述训练快照保留各次运行的历史参数，不代表当前默认值。
 
-所有本地共享入口在仓库根目录执行：
+### 2026-11-01 VelStand history 软垫微调
+
+用户指定从 `2026-11-01_16-15-53_velstand_history_512_joint4/` 迁移至软垫，256 环境、比例 0.4，
+并明确选择 **PPO 微调、保留 history、暂停双教师 BC**。固定源权重为 `model_4450.pt`，不随原目录更新。
+配置：`configs/rtx4090_synreal_velstand_soft_pad_history.json`；显式 CLI `--num-envs 256 --pad-probability 0.4`。
+用户在停止训练后要求课程重新开始：当前 JSON 已设 `inherit_training_stage=false`。
+下一次从原平地权重 `--init-from` 时，保留 history 网络、动作 std 和双归一化，轮次/课程计数从 0 开始，
+优化器重新初始化，仍为纯 PPO、256 环境、软垫比例 0.4。启动命令必须去掉 `--inherit-training-stage`，
+也不要用 `--resume`（它会恢复保存的课程）。本次仅修改配置，没有重新启动训练。
+下述从 4451 开始的记录属于已停止的历史实验；其验证目录 `run_training.py` 专用于当时的继承课程实验，
+不用于新的课程重启。新实验使用正常 `examples.microduck.train` 入口。
+154 个平地＋102 个软垫，使用当前 `env.py` 的 6×6×0.06 m、24×24×3 网格、base_z=0 软垫；
+注意这不是早期 base_z=-0.06 的齐平凹槽垫，软垫未变形顶面为 0.06 m。材料与几何本次未改。
+此前已停止的实验继承学生 Actor/Critic、两套 history 编码器、动作 std、归一化和成熟课程，从 4451 继续编号；
+优化器重置，固定 LR=1e-4、entropy=0.001、rollout=24、save=50，计划追加 60000 轮。
+物理保留源配置：2.5 ms×8、非线性 5 / 线性 35、关节 primal=4，动作/历史仍为 50 Hz。
+这属于显式地形迁移，不是旧平地环境的严格 `--resume`；新 checkpoint 后续可按自身环境严格续训。
+原平地 PID=3171780 启动本实验时仍健康运行；用户随后明确要求关闭原平地训练，已发送 SIGINT 并确认退出。
+最后持久化平地 checkpoint 为 `model_4550.pt`；停止记录见原 recurrence 验证目录的 `user_stop.json`，
+状态标为 `stopped_by_user`，不得当作崩溃自动恢复。软垫 PID=3314870 保持运行，关闭时已到第 4467 轮。
+软垫启动 PID=3314870；实时路径 `.validation/microduck_velstand_soft_pad_20261101/training_status.json`，
+输出日志同目录 `training.log`，启动记录 `production_process.json`。任何操作前重查 PID 与状态。
+用户随后也明确要求关闭软垫训练：已向 PID=3314870 发送 SIGINT 并确认退出，状态为 `stopped_by_user`。
+停止前日志到第 4482 轮，尚未到下一保存点 4500；目录中只有迁移初始化的 `model_4450.pt`，
+本次正式软垫训练的后续更新未保存。停止记录在同目录 `user_stop.json`，不得当作崩溃自动恢复。
+迁移/软垫/BC 定向回归 73 通过、1 跳过；补充 BC 不继承断言后迁移套件 16 通过。
+真实 SynReal 8 环境×3 轮完成，逐项确认网络/双归一化迁移一致、无软垫保护故障；不等于长期技能验收。
+正式运行目录 `logs/rsl_rl/microduck_synreal/2026-11-01_22-07-40_939388_velstand_history_soft_pad_256_p04/`；
+启动后已核对 4451、4452 两轮损失有限，软垫变形/翻转故障计数为 0，共享 GPU 时每轮约 60 秒。
+
+### 2026-10-31 新平地 history 训练（优先核查此记录）
+
+用户明确要求从头训练、1024 环境、持续监测，确认崩溃后查因并续训；随后确认线性迭代使用当前值 35。
+10:23（Asia/Shanghai）已启动 velocity_history_flat_supervised，任务 velocity、纯平地、history 独立双编码器，
+seed=42，目标 30000 轮；物理 **5/35**、dt=0.005、4 子步，其余沿用当前 env.py 和既有训练 JSON。
+运行目录：logs/rsl_rl/microduck_synreal/2026-10-31_10-23-25_454469_velocity_history_flat_supervised/。
+启动训练 PID=2420345、监测 PID=2420344；任何操作前重新确认进程身份与状态。
+实时入口为 .validation/microduck_supervised_20261031/status.json，详细操作见同目录 README.md。
+监测每 10 秒更新；额外保留最后 64 个物理子步前的状态/动作，崩溃时写 failure_trace.pt；不改奖励或物理保护。
+用户后续要求：详细检查及汇报每 20 分钟一次；崩溃仍及时处理。
+初始 model_0 已加载核对网络、优化器、双归一化参数均有限；这不代表收敛或长期数值稳定。
+监测器只报告崩溃/停滞，持续 agent 任务负责查因、验证修复及 checkpoint 恢复，不能无条件循环重启。
+下列 10-30 记录为历史快照，不应据其 PID/目录判断当前训练。
+
+2026-10-30 14:55 只读核查：PID `1958708` 仍在运行，14:46:29 启动，命令如下（记录用途，勿重复启动）：
 
 ```bash
-cd /home/ubuntu/work/style3d-sim
-source .venv/bin/activate
-
-# 先做目标后端的短测
-python -u -m examples.microduck.train \
-  --training-config examples/microduck/configs/rtx4090_synreal_official_adapted.json \
-  --solver synreal --task velocity --num-envs 4 --iterations 2 \
-  --run-name synreal_velocity_smoke
-
-# SynReal 正式实验；需要明确启动长训练时再执行
-python -u -m examples.microduck.train \
-  --training-config examples/microduck/configs/rtx4090_synreal_official_adapted.json \
-  --solver synreal --task velocity --run-name synreal_velocity
-
-# MuJoCo 基线，使用同一套本地配方
-python -u -m examples.microduck.train \
-  --training-config examples/microduck/configs/rtx4090_synreal_official_adapted.json \
-  --solver mujoco --task velocity --run-name mujoco_velocity
+.venv/bin/python -u -m examples.microduck.train \
+  --training-config examples/microduck/configs/rtx4090_mixed_soft_pad.json \
+  --init-from logs/rsl_rl/microduck_synreal/2026-10-28_10-04-52_798619_velocity_PCG/model_13500.pt \
+  --num-envs 128 --pad-probability 0.3 --iterations 30000 \
+  --run-name velocity_inset_pad_finetune --viewer null
 ```
 
-StandUp / VelStand / BallKick 分别换成 `--task standup` / `velstand` / `ballkick`，同时改运行标签。
-本地 VelStand 当前不加载教师；命令能运行不代表流程已等价于官方。
-CPU 诊断用 `--device cpu --num-envs 1`；MuJoCo CPU 后端不支持当前复制多世界模式。
+运行根目录为 `logs/rsl_rl/microduck_synreal/`，当前运行子目录：
+`2026-10-30_14-46-36_838789_velocity_inset_pad_finetune/`。
+TensorBoard 事件文件中的 PID 与进程一致，14:55 仍有更新；当时最新保存为 `model_100.pt`。
+另有 `2026-10-30_14-48-33_254992_velocity_inset_pad_finetune/`，事件 PID 为 `1959886`，
+最后事件修改时间 14:49，仅见 `model_0.pt`；**不能按目录最新时间把它误认成当前训练**，退出原因本次未判定。
+PID、轮次和存活状态仅为时间快照，任何后续操作必须重查。
 
-```bash
-# 本地 checkpoint 回放：替换为真实文件，同时保留旁边的 config.json
-python -u -m examples.microduck.play \
-  --solver mujoco --checkpoint /path/to/run/model_300.pt \
-  --num-envs 1 --viewer gl --num-frames 3000 --command 0.2 0 0
+已核对当前运行保存配置与 `env.py` 的主要场景参数一致：
 
-# 同任务、同后端、同配方续训：显式核对物理开关
-python -u -m examples.microduck.train \
-  --solver mujoco --resume /path/to/run/model_300.pt \
-  --num-envs 1024 --randomize-foot-friction --iterations 1000 --run-name continued
-
-# TensorBoard
-tensorboard --logdir logs/rsl_rl
-```
-
-回放不能把运行目录当 checkpoint；必须选择其中的 `model_*.pt`。
-`--command` 三个量分别为前进、横移速度（m/s）与 yaw 角速度（rad/s）。
-Velocity/VelStand 窗口中 I/K 前后、J/L 横移、U/O 转向，每次按键增减一档，松开不会自动归零。
-需要确认零指令时用 `--command 0 0 0 --diagnostics`。
-
-`--viewer null --benchmark --num-frames 300` 可做无窗口测速；`--full-step` 对照完整环境步。
-跨后端回放需 `--allow-cross-backend`；只做旧版本诊断时才使用 `--allow-recipe-mismatch`。
-正常效果评估应使用匹配配方，不应修改元数据或删除检查来绕过契约。
-
-新机器依赖以仓库根 README 为准；本地曾使用：
-
-```bash
-uv sync --extra locomotion --inexact --no-install-project
-```
-
-该命令不安装本项目原生扩展；扩展安装遵循仓库根说明，不要无故重建现有工作环境。
-Python 3.12 找不到 pip 安装的 CUDA runtime 库时，曾使用：
-
-```bash
-export LD_LIBRARY_PATH="$PWD/.venv/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:${LD_LIBRARY_PATH:-}"
-```
-
-SynReal 由 `common.py` 使用现有登录接口；环境变量缺少时隐藏输入。`--force-login` 会尝试替换已有会话。
-官方独立环境缺失时，`mjlab_train.py` 提示使用 `uv sync --project examples/microduck/microduck_rl-develop --locked`。
-
-以下是官方参考路径，不是共享 SynReal 训练：
-
-```bash
-python -m examples.microduck.mjlab_train --list-tasks
-python -m examples.microduck.mjlab_train --num-envs 64 --iterations 5
-python -m examples.microduck.pretrained --solver mujoco --policy velstand --keyboard
-python -m examples.microduck.play --solver synreal --policy walk --num-frames 3000
-```
-
-`pretrained.py` 当前只支持 MuJoCo，默认 `--actuator metadata`；显式 `--actuator bam` 才选 BAM 分支。
-它使用 `logs/pretrained/microduck/` 下已有 ONNX；原 `walk` 演示和本地 `.pt` 的动力学负载不可直接比较。
-
-<a id="contracts"></a>
-
-## 6. 控制、观测和物理契约
-
-- 物理 dt=0.005 秒、每控制步 4 子步、策略 dt=0.02 秒（50 Hz）；奖励总和乘策略 dt。
-- PD：KP=2.0、KD=0.053、力矩上限 0.96。动作是 HOME 的关节位置偏移。
-  每子步计算裁剪后的命令力矩，再换算位置目标交给后端；不是直接使用官方 BAM 电机模型。
-- 14 舵机顺序：左腿 0～4、颈/头 5～8、右腿 9～13。被动轮和 backlash DOF 保留在物理模型中，
-  使用规范舵机视图处理策略动作/观测，不能按原始模型交错索引直接访问。
-- Actor 固定 61 维：角速度 3、重力投影 3、关节位置偏差 14、关节速度 14、上次动作 14，
-  然后 twist `48:51`、head `51:55`、body `55:61`。未使用的指令槽必须按任务 zero padding。
-- Critic 按任务组织特权观测；velocity/velstand 70、groundpick 68、ballkick 74 维。
-  两后端均明确省略官方双脚 6 维接触力，其他任务看运行配置，不泛化这四个数字。
-- 训练保留配置中的噪声、编码器偏差、IMU 安装误差、延迟、缩放/截断；Critic 无噪声。
-  非空 observation history/modifiers 未适配时会报错，不静默忽略。
-- Newton 四元数主要用 xyzw，官方 facade 用 wxyz。Newton body 线速度是 COM 速度，
-  奖励读取 root/site link-origin 速度时要补偿角速度与 COM 偏移；相关转换已有测试。
-- Torch/Warp 交界显式同步；SynReal 重置或外部状态写入后要同步 affine body 状态。
-
-后端区别：
-
-| 项目 | MuJoCo | SynReal |
-| --- | --- | --- |
-| 构建 / 求解器 | `newton.ModelBuilder` / `SolverMuJoCo` | `s3d.ModelBuilder` / `s3d.NewtonSolver` |
-| 积分 | `implicitfast` | `IMPLICIT_EULER` |
-| 主要迭代设置 | Newton solver，20 次 | 增广拉格朗日；非线性 5、线性 30、alpha 200 |
-| 接触提交 | 后端求解路径处理 | 每子步求解前显式碰撞 |
-
-MuJoCo 容量当前设为 `njmax=256`、`nconmax=4096`；倒地姿态曾超过站姿估计的碰撞候选容量。
-SynReal 路径没有自动回退 MuJoCo。共享 `newton.eval_fk/eval_ik`、碰撞或 Viewer 不意味着偷偷使用 MuJoCo。
-共用公式不保证同动作下产生同状态、同奖励或同训练结果。
-
-自碰撞默认关闭，显式 `--self-collisions` 才开启；这也可能改变资产选择。
-当前 `policy_spec.py`：轮式用 rollers 资产，VelStand/BallKick 或开启自碰撞时选 allcollisions，
-普通 Velocity 用 walk，其余用 groundcontact，Backlash 用相应 twin。网格转凸包代理。
-地面、球体碰撞保留；自碰撞关闭时其奖励虽然有注册，却没有有效自碰撞信号。
-
-脚底摩擦随机化由模板开启，启动时每环境采样 `[0.7,1.3]`，同环境双脚共享。
-不使用模板且不传开关时固定 1.0。分环境材质会影响 SynReal shared-world 优化与吞吐。
-
-<a id="alignment"></a>
-
-## 7. 已完成移植与仍有差异
-
-### 7.1 已完成
-
-- 默认入口统一到 `official_adapted_v1`；旧 `legacy`、旧简化奖励/观测/训练分支已删除。
-- 官方注册全部 33 任务接入；增加轮式/齿隙资产、被动关节映射与相应观测。
-- 从本地官方环境导出最终配置，提取奖励/重置公式并有 AST 来源检查；适配基础状态与奖励汇总。
-- Actor/Critic、延迟/偏差、指令、重置姿态、终止、推扰及多数课程已接入。
-- SitStand 二值指令及约 2 秒过渡、GroundPick 周期相位、相对航向、前进/原地转向混合采样已实现。
-- 脚部/头部/全身几何接触、腾空/触地计时、摆动峰值和全身角动量已接入。
-- Rough / Slope 几何、出生原点和地形高度查询已接入；Roulade 接触门控及镜像损失已适配。
-- 修正 RollerStandUp 官方旧轮式索引与规范 14 舵机视图不匹配的问题，修正在本地适配层。
-- 本地 checkpoint 回放、跨后端检查、同任务续训和课程恢复已接入。
-- 数值异常保护、SynReal 隐式欧拉稳定性修复，以及本地 Velocity 步态奖励已接入；效果见第 11 节。
-
-### 7.2 未完成或近似项
-
-| 项目 | 当前边界 |
+| 项目 | 当前值 / 含义 |
 | --- | --- |
-| BAM | 使用共享 PD；电机电压模型、摩擦、动作延迟等没有完整对齐官方 |
-| 力矩相关奖励 | 使用末子步的命令 PD 力矩，不是官方 BAM 实际输出的完全等价量 |
-| 接触力/冲量 | 几何接触不是求解后力；不能用候选数冒充接触力 |
-| 力/冲击奖励 | VelStand 的 servo/head/trunk impact 等仍省略 |
-| GroundPick | soft_landing、head_impact_penalty 未完整接入；mouth_payload_force 外力钩子未接入 |
-| 物理随机化 | 质量/惯量、COM、armature、BAM/轮轴摩擦及轮轴摩擦课程仍未完整适配 |
-| 地形 | 官方生成器 seed=42 的固定样本，非每次重新生成；高度射线只检测地形 |
-| 教师训练 | 没有官方 `PpoWithExpertBc`，没有双教师、跨任务 warm-start、教师归一化/指令映射 |
-| 物理与算法版本 | 接触代理、求解器设置、积分器及 RSL-RL/mjlab 版本有差异 |
-| 部署 | 本地元数据 `deployment_compatible=False`，不能据此宣称可直接上真机 |
+| 后端 / 任务 | SynReal / velocity，`mixed_soft_pad` |
+| 环境 | 128：前 90 个纯平地，末 38 个软垫；固定分组 |
+| 软垫 | 6×6×0.06 m，`base_z=-0.06`，未变形顶面 z=0，固定底面 |
+| 网格 | 24×24×3；水平单元 **25 cm**、竖直 2 cm；每垫 10368 个四面体 |
+| 材料 | density=80、shear_modulus=2000、lame_lambda=10000、damping=5 |
+| 接触 | contact_stiffness=5000、particle_radius=0.0015 |
+| 地板 | 软垫组为四周地板＋凹槽底板；垫面上方没有 z=0 硬盖板 |
+| 出生 | `fixed_groups_center`；软垫组每次 reset 回到 XY=(0,0)，其他姿态随机化保留 |
+| 训练边界 | 软垫组根节点任一轴绝对值 >2.9 m 时 timeout；纯平地组半径 >2.5 m |
+| 物理 | dt=0.005，4 子步，控制周期 0.02 s；非线性 5 / 线性 15 |
+| 其他求解 | primal=1、block preconditioner=False、air_density=1.225、implicit Euler |
+| 正常训练 | Actor 噪声、动作探索、PPO 更新开启；摩擦随机化开启 |
+| 摩擦 / 推扰 | 每环境双脚共享摩擦 [0.7,1.3]；每 3–6 秒 X/Y 速度增量各 ±0.3 m/s |
+| PPO | rollout=24、save=100、固定 LR=1e-4、entropy=0.001、计划 30000 轮 |
+| 初始化 | 加载原平地 13500 的网络、动作 std 和归一化；优化器/新课程计数重置 |
 
-`mouth_payload_force` 是施加负载的流程，官方快照权重为零；不要把其未接入解释为缺少力读取接口。
-按运行元数据 `official_alignment.supported_rewards / omitted_rewards / approximate_rewards` 判定覆盖。
-静态快照中有字段或计数包含零权重项，都不等于它在该次训练有效。
+**尺寸改变同时改变了离散精度。** `env.py` 中“保留 5 cm 水平单元”的注释已不符合实际，本次仅记录，未改代码。
+旧 1.2 m / 24 网格是 5 cm；当前 6 m / 24 是 25 cm，不能当作材料动力学完全相同的加长垫。
+若保持 5 cm，需要 120×120×3，四面体数为当前的 25 倍，不能直接假定现有训练开销可接受。
 
-BAM 是否值得移植：PD 能训练出稳定步态，目前优先建立可靠基线；严格官方复现和 sim-to-real 时再提高优先级。
-可以先研究环境子步里的执行器适配，尚未完成 SynReal 力矩/摩擦接口审计，不能承诺完全不需要底层改动。
-不要把蹦跳或起身失败未经验证地归因于 PD，也不要声称换 BAM 必然改善。
+旧 1.2 m 垫的训练阈值为 ±0.5 m，从中心按实际 0.3 m/s 理想匀速仅约 1.7 秒就复位。
+因此“短 episode 限制长距离稳定性学习”是合理假设，但尚未做保持网格间距等条件一致的长短垫训练对照。
+当前加大尺寸并不能单独证明这一假设或解决头颈失稳。
 
-<a id="velocity"></a>
+监测入口注意：旧 `.validation/microduck_monitor_20261029/watch.py` 绑定旧运行，不会自动跟随新训练。
+14:55 的本机 `6006` TensorBoard 仍指向 **10-29 旧运行**，不是上述 6 m 新运行。
+本次未建立新的持续监控任务，不能据旧脚本/旧面板声称新训练已持续评估。
 
-## 8. Velocity 奖励、课程与最新步态修改
+## 3. 代码导航与配置契约
 
-### 8.1 官方基础项
-
-| 奖励 | 基础权重 / 课程 |
+| 文件 | 职责 |
 | --- | --- |
-| 线速度、角速度跟踪 | 各 +2 |
-| upright / pose | +2 / +1 |
-| body_ang_vel / angular_momentum | -0.05 / -0.02 |
-| dof_pos_limits | -1 |
-| action_rate_l2 | -0.1，后期课程到 -1（约 1500 轮） |
-| air_time | +3，每只脚独立计入，腾空时长区间 0.125～0.300 秒 |
-| foot_clearance / foot_swing_height | -2 / -0.25，目标 0.02 m |
-| foot_slip / self_collisions | -0.1 / -1；后者依赖实际自碰撞开关 |
-| head_pose_tracking | +2 |
-| body_pose_tracking | 0 |
-| head_pose_bias | 0 → +1 → +2 → +3；函数自身返回惩罚，不能只看权重符号 |
+| [env.py](env.py) | 唯一共享环境；PhysicsConfig、PAD_CONFIG、EnvironmentConfig、PD、步进与重置 |
+| [common.py](common.py) / [train.py](train.py) | CLI、配置与登录；PPO 新训、严格续训、迁移初始化 |
+| [checkpoint.py](checkpoint.py) / [ppo.py](ppo.py) | 权重/归一化迁移与哈希；任务 PPO、首帧归一化适配 |
+| [policy.py](policy.py) | 可选历史 Actor–Critic；独立历史编码器与复用当前帧统计量的归一化 |
+| [play.py](play.py) | 本地 checkpoint 回放、交互指令、回放边界；不传 checkpoint 则是官方 walk 演示 |
+| [scenes.py](scenes.py) | 统一场景：软垫/凹槽、吊床/沙地/台阶、Rough/Slope；接触、分组、重置、保护与单世界回放 |
+| [policy_spec.py](policy_spec.py) | 资产、规范关节顺序、HOME、PD 增益、碰撞过滤 |
+| [recipe.py](recipe.py) / [velocity_commands.py](velocity_commands.py) | 配方/课程/指纹；六方向低速与连续启停采样 |
+| [reward_functions.py](reward_functions.py) | 上游奖励公式与本地步态、垫面脚滑、推进奖励实现 |
+| [reward_functions.py](reward_functions.py) / [velocity_rewards.py](velocity_rewards.py) | 提取的官方奖励函数 |
+| [observations.py](observations.py) / [events.py](events.py) | 观测噪声/延迟；摩擦、重置、推扰与课程 |
+| [adapter.py](adapter.py) / [sensors.py](sensors.py) / [reset_functions.py](reset_functions.py) | 状态约定、几何接触和重置公式 |
+| [stability.py](stability.py) | 物理异常快照 |
+| [task_registry.py](task_registry.py) / [任务快照](configs/official_snapshot.json) | 任务映射；奖励/事件/指令/课程与任务 PPO |
+| [evaluate_standup.py](evaluate_standup.py) | 四类起点站起评估 |
+| [ui.py](ui.py) / [ui_backend.py](ui_backend.py) / [ui_assets](ui_assets/) | 本机中文训练与评估工作台 |
+| [mjlab.py](mjlab.py) / [export_recipe.py](export_recipe.py) | 官方独立训练/ONNX 路径；配方与地形导出 |
 
-body-frame 线速度跟踪公式本身也包含 Z 速度误差；新增项使用 world-frame Z。
-upright 限制倾斜，不直接要求身体高度不变或左右脚交替。
-`air_time`、净空、摆动高度、脚滑都有指令门控，真正零 twist 时均为零。
-因此零指令踏步不能直接认定为“刷腾空奖励”；身体平稳也不能证明脚不在动。
+`train`、`play`、`scenes` 都委托 `MicroDuckEnv.advance_physics()`，不是三套动力学实现。
 
-速度范围 vx `[-0.4,0.4]`、vy `[-0.3,0.3]` m/s、yaw `[-1,1]` rad/s，重采样 3～8 秒。
-纯前进采样参数 20%；原地转向覆盖概率 Velocity 15%、VelStand 20%，会清除 standing 标记。
+2026-11-03 场景模块合并：`soft_pad.py`、`mixed_terrain.py`、`pad_contacts.py`、`terrain.py`、
+`soft_pad_policy.py`、`soft_pad_scene.py` 的实现统一移入 `scenes.py`，旧文件已删除。
+训练/普通回放入口及 `--terrain` 参数不变；独立软垫入口改为
+`python -m examples.microduck.scenes --preview` 或 `python -m examples.microduck.scenes --checkpoint <model.pt>`，
+其余参数保持原约定。场景导入统一使用 `examples.microduck.scenes`；归档命令保持历史原文。
+本次为文件归并，保留已有场景物理；同时修复静态预览对空求解器调用 `prepare_contacts()` 的入口错误。
+CPU 预览仍受当前纹理 SDF 只能在 CUDA 构建的限制。配方指纹改为覆盖统一文件，
+旧 checkpoint 诊断回放仍需显式 `--allow-recipe-mismatch`，不能伪装为旧源码的严格续训。
+合并后全目录回归 369 通过、17 跳过；新增独立入口 CUDA 单帧静态预览测试另行通过，
+清除认证环境后确认无需登录和求解器。没有启动训练或新增动力学验证。
 
-下表保留官方/旧本地课程，当前精确 `velocity` 已采用第 8.3 节的本地课程。
+HOME 保持有明确不同配置：dt=1/480、8 子步、5/30、primal=3、block=True、air_density=0。
+HOME 测试不能当作策略 50 Hz 配置的步态验证。
 
-| 控制步阈值 | 约 PPO 轮数（rollout=24） | 官方/旧本地 standing 参数 |
-| --- | --- | --- |
-| 0 | 0 | 2% |
-| 12000 | 500 | 5% |
-| 18000 | 750 | 10% |
-| 24000 | 1000 | 15% |
-| 36000 | 1500 | 20% |
-| 48000 | 2000 | 25% |
+配置顺序：显式 CLI 覆盖训练 JSON 的 `training` 默认值；环境默认来自 `env.py`。
+PPO 顺序为 `ppo.py` 默认 → 任务 PPO → JSON `ppo`；严格 resume 使用保存的 PPO。
+默认配方为 `official_adapted_v1`，观测契约为 `official_asymmetric_pd_v2`；旧简化配方已删除。
+`--run-name` 只是标签。`--init-from` 与普通回放默认使用当前环境；checkpoint 只帮助选择地形 profile。
+`--use-checkpoint-environment` 才显式恢复已保存的物理/地形设置，未保存字段不能当作已恢复的历史事实。
 
-指令/奖励阶段通常用严格 `>`，事件/终止阶段用 `>=`，精确边界查实现。
-表中参数不是最终零指令占比：旧课程约为 standing 参数 × 0.85，例如 1200 轮约 12.75%，后期约 21.25%。
-不是把前进/转向/站立比例直接相加，也不等于按 episode 长度加权后的状态占比。
-
-### 8.2 本地奖励（当前有效配置）
-
-只对精确任务名 `velocity` 生效；不自动扩展到 Rough、Backlash、VelStand 或其他恢复任务。
-通过共享 `official_recipe.py` 计算；髋侧摆和目标超限两项复用 `official_reward_functions.py` 中已有官方函数。
-权重/参数统一放在快照的 `tasks.velocity.rewards`，标记 `local: true`。
-
-| 奖励 | 当前权重 | 定义与门控 |
-| --- | --- | --- |
-| `vertical_body_velocity` | **-1.0** | trunk_base 世界系 link-origin 竖直速度平方 |
-| `standing_foot_motion` | **-1.5** | 双脚 world xyz 速度平方和；平移指令范数及 yaw 绝对值分别 ≤0.01，倾角 ≤35° |
-| `standing_foot_contact` | **-0.5** | 在与静止脚速项相同门控下，未与地面几何接触的脚数（0、1、2） |
-| `straight_foot_heading` | **-1.5** | 双脚相对机身 yaw 超过 5° 容差后的弧度误差平方和 |
-| `hip_roll_neutral` | **-1.0** | 左右 hip_roll 相对 HOME 的绝对偏差之和（弧度），只选规范舵机索引 1/10 |
-| `action_over_limit` | **-0.5** | 14 舵机目标角超出硬限位加 0.3 rad 余量的绝对超限量之和 |
-
-脚尖朝向项还要求 yaw 指令绝对值 ≤0.1 rad/s、横移指令绝对值 ≤0.05 m/s、倾角 ≤35°。
-它以机身朝向为参考，不固定世界朝向；在当前 Velocity 资产 HOME 中，两脚 site +X 与 trunk +X 对齐。
-静止项只读取脚部，不惩罚头部运动；大倾角时关闭以允许恢复平衡。
-静止接触项逐脚判断 `found > 0`，不把一只脚的多个接触点当成双脚落地。
-它补充脚速项无法区分“静止落地”和“静止悬空”的缺口；一只未落地脚每控制步扣 0.01（权重 -0.5 × dt 0.02）。
-它不约束有移动/转向指令时的支撑相位；尚未增加左右脚交替奖励，不能声称强制自然交替步态。
-接触为几何检测结果，不是接触力。新项验证了触发及门控，尚未证明新策略训练收敛后能完全停稳。
-
-髋侧摆项约束实际角度；目标超限项约束 `HOME + action`，允许低增益 PD 的正常超调余量。
-它们不会裁剪动作或修改物理限位，也没有改变执行器或引擎；行走和转向时同样计算。
-髋侧摆项单独短训未纠正旧策略顶限位，不能把它单独宣传为已验证的解决方案，详见第 11.3 节。
-
-各项贡献都乘 `step_dt=0.02`；`Task/<reward>` 日志是乘 dt 前的加权值。
-`official_alignment.local_rewards` 会记录这些配置；导出器保留已有 `local: true` 奖励及其调参。
-
-版本提醒：最初新增静止/朝向两项时权重是 **-2.0**，其后当前文件已调为 **-1.5**。
-`velocity_still_heading` 的运行配置也保存了 -1.5。不要用早期聊天或短测记录覆盖当前值。
-相关 28 项测试和四环境两轮 PPO 短测是初始 -2.0 版本的验证；未据此宣称 -1.5 长训练已收敛。
-
-### 8.3 当前本地站立采样课程
-
-用户在 `velocity_stand_contact/model_1500.pt` 反馈内八已改善、零指令仍踏步。
-实测静止奖励已触发；目前没有证据表明继续增加惩罚就能解决。此次仅增加站立命令的训练覆盖，六项奖励权重不变。
-只覆盖精确 `velocity`，配置位于 `tasks.velocity.curricula.standing_envs`，标记 `local: true`。
-
-| 控制步阈值 | 约 PPO 轮数 | standing 参数 | 经原地转向覆盖后的零 twist 概率 |
-| --- | ---: | ---: | ---: |
-| 0 | 0 | 20% | 17% |
-| 12000 | 500 | 25% | 21.25% |
-| 18000 | 750 | 25% | 21.25% |
-| 24000 | 1000 | 30% | 25.5% |
-| 36000 | 1500 | 30% | 25.5% |
-| 48000 | 2000 | 35% | 29.75% |
-
-阶段按 `>` 选取；原地转向仍优先覆盖约 15% 样本，速度范围、命令重采样时长和头部课程未改。
-此概率指一次命令重采样的期望结果，不是按时间加权的精确训练数据占比，也不是专门保证停走转换次数的课程。
-提高站立样本比例是待训练验证的改进假设，不是已证明踏步根因仅为样本不足。
-`official_alignment.local_curricula` 记录实际本地课程，导出器与本地奖励一样保留其 `local: true` 配置。
-运行中的旧进程不会热更新；旧 checkpoint 的课程仍以对应运行的代码版本为准。
-
-<a id="velstand"></a>
-
-## 9. VelStand 流程、教师与已知训练问题
-
-VelStand 是一个同时行走、站立、姿态控制、倒地起身并继续执行指令的策略，不是运行时切换两个策略。
-
-官方主要路线是：Walking 权重热启动 → 带恢复课程的 PPO → PPO 更新后做双教师 BC。
-热启动保留策略、归一化和优化器，重新开始 VelStand 课程计数；官方后续版本也使用普通续训保持课程最终阶段。
-依据：[官方训练谱系](microduck_rl-develop/docs/velstand_policy.md) 与
-[官方 distill.py](microduck_rl-develop/src/mjlab_microduck/tasks/distill.py)。
-
-无特殊 body 指令时，按 Actor 重力投影计算倾角 θ：
-
-| 条件 | 官方 BC 教师 |
+| 加载方式 | 契约 |
 | --- | --- |
-| θ ≤25° | Walking anchor |
-| 25° < θ ≤35° | 无教师，仅 PPO |
-| θ >35° | StandUp expert |
+| `--resume` | 同任务/后端/配方及环境校验；恢复优化器、归一化和课程；iterations 表示本次追加量 |
+| `--init-from` | SynReal 同任务 Velocity/VelStand、无自碰撞；加载网络/std/归一化，重置优化器和训练计数，不继承教师 BC |
+| `--init-from ... --inherit-training-stage` | 加载网络/std/归一化并继承轮数与课程阶段；优化器仍重置，使用当前奖励配置 |
+| `play --checkpoint` | 均值动作推理；保留 checkpoint 旁的 config.json |
+| `--allow-recipe-mismatch` | 仅用于明确接受差异的诊断回放；不修改历史元数据，不放宽严格续训 |
 
-零 twist 且有 body 指令时，退出 Walking 约束；仅倾斜指令交给 StandUp，高度变化由 PPO 学习。
-已明显倒地时仍按 StandUp 恢复处理。教师处理采样状态，环境动作始终由学生输出，教师冻结。
-给 StandUp 的输入副本将 twist 清零；严重倾倒 >75° 时官方还清零 `6:48` 的关节/上次动作槽。
-学生真实输入不变；关节位置偏差清零表示 HOME，不是把仿真关节实际归零。
-Walking 教师的 yaw 指令映射表针对官方教师标定，自训教师不能直接照搬。
+resume 不恢复完整仿真/RNG 状态；迁移也不保证保留原技能。
+历史策略的运行时缓存随新环境 reset 后重建，不随 PPO checkpoint 恢复旧 episode。
+两种网络均由 `create_runner()` 统一归一化 learn() 的首帧，包含纯平地续训；不要在 train 中重复包装。
+配方指纹含环境、地形及适配源码，相关文件的注释改动也可能改变指纹。
+文档不再维护易过时的“当前指纹”常量，应实时读取源码与运行元数据。
+`model_0.pt` 已做过一次 PPO 更新；`model_N` 的编号不是完成更新次数。
+`--inherit-training-stage` 从 checkpoint 内保存的 `iter + 1` 开始，首次 reset 前恢复课程控制步计数；
+`--iterations` 仍表示追加轮数。要求新旧 `num_steps_per_env` 一致，避免课程步数在后续续训中漂移。
+课程按当前快照在该步数求值，不复制旧权重或仿真状态；普通 `--init-from` 默认行为不变。
 
-本地 `official_ppo.py` 目前保持普通 PPO，未加载 BC 或教师。
-新开 VelStand 是随机初始化，但快照仍为官方 `WARM_START=True` 课程，这是已确认的不等价点。
-训练好 velocity / standup 只是准备；还需跨任务初始化、各教师归一化、BC、路由和输入处理，不能仅填写路径。
-当前 `--resume` 拒绝跨任务/跨后端加载，不要偷偷放宽检查充当 warm-start。
+### 可选历史网络
 
-本地课程（每轮 24 步，近似轮数）：
+训练使用 `--policy-variant standard|history`，默认 `standard` 保留原网络。
+`history` 在当前观测之外缓存过去 10 个控制步的 Actor 前 48 维；不含当前步，按最近到最远排列。
+每环境独立缓存，控制步只推进一次；重复读取不推进，局部 reset 仅清理选中环境并用首帧填满。
+Actor 和 Critic 使用同一份历史数据，但各有独立的 `480 → 128 → ELU → 64` 编码器，参数与梯度不共享。
+Velocity 的 Actor 为 `61+64 → 512 → 256 → 128 → 14`，Critic 为 `70+64 → 512 → 256 → 128 → 1`。
+历史每帧复用当前 Actor 前 48 维的归一化统计量，不重复计入统计；Critic 当前观测保留自身统计量。
+PPO 存储传输维度为 Actor 541 / Critic 550，编码器在策略内将历史压缩为 64 维。
+`config.json` 保存网络选项和历史契约；resume、普通回放及独立软垫回放自动识别。
+两种网络不相互转换；新历史网络从头训练，同类型 checkpoint 才能续训或 `--init-from`。
+网络实现集中在 `policy.py`，缓存集中在 `observations.py`；未增加奖励、特权特征或循环网络。
 
-| 轮数附近 | 变化 |
-| --- | --- |
-| 开始 | 动作变化惩罚 -1，standing 参数 25%；常规直立出生外已有 5% 坐姿 |
-| 100 | 取消倾角超过 70° 的立即倒地终止，推扰增强 |
-| 150 | 20% 蹲姿出生 |
-| 300 | body 指令范围扩大 |
-| 400 | 推扰再次增强 |
-| 600 | 开启倒地惩罚、恢复成功奖励和倒地向上运动奖励 |
-| 700 | 倒地出生 15% |
-| 800 | topple push 水平各轴速度增量最大到 ±1.2 m/s |
-| 1000 | 倒地出生 30% |
-| 1400 | 倒地出生 45% |
+## 4. 物理、观测、边界与数值保护
 
-后期出生约 45% 倒地、20% 蹲姿、5% 坐姿、30% 常规直立，倒地内含侧躺/随机姿态/关节变体。
-连续倒地判定满 8 秒会重置，每局最多 20 秒。BallKick 则是 5 秒；不可把 Velocity/VelStand 时间泛化到全部任务。
-若要无教师从零训练，需要另外设计并验证课程；延长现有预算不能保证解决失败。
+- 软垫是独立场景选择：`--terrain mixed_soft_pad` 可与注册任务组合，仍要求 SynReal。
+  它替换任务默认的平地/Rough/Slope 地形，不将这几种几何叠加。CLI、工作台和独立软垫回放不再限定 Velocity。
+  任务的碰撞模型、Actor/Critic 维度、出生姿态、指令、奖励和终止课程继续由任务定义；
+  旧软垫躯干高度 <0.065 m 的附加终止仅保留在 Velocity 家族，不能截断起身/坐姿/翻滚任务。
+  分地形速度误差只用于 Velocity/VelStand；BallKick 的球随机器人 XY 平移，并按实际垫面放置。
+  `scenes --checkpoint` 自动选择任务和自碰撞模型，按保存的 Critic 维度加载 standard/history 策略；
+  根据 checkpoint 轮次恢复出生课程，`R` 重采样任务姿态并重置垫子和历史，保持无 episode 自动复位。
+  独立回放仅为 Velocity/VelStand 使用速度键，其他任务保留自身指令和阶段推进；HOME 展示仍使用初始姿态。
+  StandUp 专项评估入口也接受软垫，站立高度相对变形垫面测量。
+  2026-11-01 验证：13 个基础任务和 5 个 Rough 变体完成真实 SynReal 单世界软垫两步检查；
+  15 个 Backlash 变体在求解器构造时遇到既有 `D6 (0 linear, 2 angular)` 不支持错误，不能宣称可运行。
+  这是底层关节能力限制，未通过删关节或变更机器人模型绕过。短测不代表技能收敛或长期接触稳定性。
+  证据与 `model_4750.pt` 普通/独立软垫回放检查见 `.validation/microduck_soft_pad_tasks_20261101/`。
+- 14 个 HOME 关节偏移动作；规范顺序为左腿 0–4、头颈 5–8、右腿 9–13。
+  每物理子步饱和 PD：KP=2、KD=0.053、力矩上限 0.96。轮式/backlash 被动 DOF 另行映射。
+- Actor 为 61 维：角速度 3、重力 3、关节位置 14、速度 14、上次动作 14，
+  twist 在 48:51，head 在 51:55，body 在 55:61。任务未用指令必须 zero padding。
+  Critic 按任务变化：Velocity/VelStand 70、StandUp/GroundPick 68、BallKick 74；省略官方双脚力通道。
+- Newton 四元数主要 xyzw、官方 facade 为 wxyz；COM 速度与 link-origin 速度要做角速度补偿。
+  reset/push 的 FK、affine proxy 和驱动历史只能同步被编辑世界，不能恢复成全局同步。
+- 碰撞代理为凸包，自碰撞默认关闭；有限刚度关节限位不是逐步硬裁剪，目标角也不等于实际关节角。
+  自碰撞奖励此时无有效信号。几何接触/接触法向不能冒充求解后接触力。
+- 固定软垫数为 `floor(N*p+0.5)`，仅末尾对应世界有软体；比例不是每次 episode 的抽样概率。
+  变形保护分母使用实际软垫世界数。渲染用独立粒子偏移缓冲，不改物理粒子。
+- **训练与回放边界不同：** `play.main()` 将 `pad_edge_timeout_margin=None`，允许跨垫边，
+  但全部世界仍有中心半径 2.5 m 限制。当前 6 m 垫上，这个回放边界位于垫内；不是取消了所有位置复位。
+  训练按垫边内缩 8 cm 提前截断 episode，让鸭子在接近垫边时复位；回放即使恢复 checkpoint 环境也会执行上述边界覆盖。
+  两者保留倒地、episode 时限、变形保护；Velocity 回合通常 20 秒。
+  独立 `scenes` 不做 episode 自动复位，`R` 手动重置机器人、垫子及策略历史。
+- 训练启用探索、噪声、推扰与学习。回放使用均值动作，关闭逐帧噪声和自动推扰，保留偏差/延迟，
+  默认关闭摩擦随机化；恢复历史环境或显式开关可能改变摩擦设置。头部固定指令也可能与训练采样不同。
+  混合回放使用完整环境步并传递鼠标力；纯平地可走快速路径。相同代码不保证跨进程轨迹逐位一致。
 
-<a id="checkpoints"></a>
+`SoftPadGuard` 每控制步独立保存粒子、刚体、关节和驱动历史；不能将 solver 的另一缓冲当作未改动的上一帧。
+每子步检查单四面体体积比 J≤0 或非有限状态；故障世界回滚并隔离，步末失败重置。
+失败帧屏蔽普通奖励，`soft_pad_failure=-50` 乘 dt 后为 -1，done=true、time_out=false。
+其中 `soft_pad_failure` 是 Velocity 配方的显式惩罚；其他任务保留各自奖励定义，仍屏蔽失败帧普通奖励并终止。
+旧 J≤0.25 正体积压缩保护已按用户要求关闭；J 是局部剩余体积比，不是整垫厚度变化比例。
 
-## 10. 回放、续训与版本陷阱
+单步失败数 >max(4, 软垫数×5%)，或 100 控制步内至少 8 次且转移失败率 >0.1%，将停止训练。
+`diagnostics/guard_stop.json` 记录停止原因/分子/分母，另有各类首次故障快照。
+其他物理爆炸、非有限状态及容量溢出仍 fail-fast；不得放宽保护掩盖问题。
+接触刚度从 50000 降到 5000、lambda 从 2000 提到 10000 曾改善短测；改变了接触/可压缩性，
+不是闭源 FEM 根因修复或真实海绵标定，亦不保证长训永不触发保护。
 
-- `recipe_fingerprint()` 哈希配方、函数、环境、资产适配和地形文件；甚至这些文件的注释改动也会影响它。
-  2026-10-27 步态优化新增奖励后，旧训练的指纹不再与当前配方匹配。
-- 当前六项本地奖励 + 站立课程指纹为 `06c466c95e0946d2dc349a3d9e5c7f711d621266a3cd323623865def8418011b`。
-  六项奖励、旧站立课程版为 `86d3281b54df70888bfb9ad5b5b2cf6269107e82a6bc7fab7cb4e808ede31187`。
-  前一轮五项版指纹为 `f2a11cc1648d34f2e6f640b92e1c9688542999e213f97a106824e286137d9c67`。
-  它是时间快照，不要把这个值手动写入旧运行配置。
-- 保留 checkpoint 旁的 `config.json`。加载检查任务、后端、观测契约和指纹。
-- `--resume` 恢复 PPO/优化器/归一化与课程计数，不恢复完整 RNG、仿真状态或启动随机化样本。
-  `--iterations` 是本次追加轮数，不是目标累计轮数。`model_0.pt` 已完成一次 PPO 更新，不是纯随机权重。
-- 续训的 PPO 配置来自保存值；环境 CLI 开关并非全从元数据恢复。
-  自碰撞、摩擦随机化、环境数等必须显式核对；不要声称恢复了整个环境。
-- CLI 回放不宜加载含 1024 环境的新训练模板；指定单环境，并核对 checkpoint 的物理开关。
-  上面的通用回放命令未启用摩擦随机化；严格复现实验时应补上保存配置中启用的开关。
-- `play.py` 已修复每帧写入指定 twist，避免 reset/自动重采样覆盖；实际观测指令仍须诊断验证。
-- 回放关闭逐步 Actor 随机噪声，但保留偏差与延迟。
-  对启用头指令的任务使用固定 HEAD_UP_COMMAND，对 zero-padding 槽保持零，BallKick 不强行抬头。
-- `PolicyPlayback` 省略训练奖励、Critic 和奖励专用求解后传感器更新；当前快速回放的随机推扰调用被注释。
-  `--full-step` 走完整步进，仍受 `play.py` 的噪声/头部指令设置影响，不能等同原训练条件。
-  快速专用物理路径主要覆盖 velocity/velstand/groundpick/ballkick，其他任务回退完整 `env.step()`。
-- 当前共享 `.pt` 配方无 CUDA graph；`--disable-cuda-graph` 主要影响原 walk 演示。
-- CUDA 保存的 checkpoint 做 CPU 诊断时，当前 RSL-RL `load()` 未显式设置 `map_location`；历史诊断曾临时适配。
-  不要把 CPU 环境可步进等同于 CLI 已支持任意 CUDA checkpoint 的 CPU 加载。
-- 同一 Viewer 不说明同一引擎；相同代码、种子也不保证独立接触轨迹逐位一致。
+## 5. Velocity 奖励与判读
 
-<a id="next"></a>
+权重以快照对应任务的 `rewards` 为准。本地步态扩展现用于 `velocity`、`velstand` 及其 Rough/Backlash 变体。
 
-## 11. 近期实验与下一步工作
+2026-11-02 新增指令步频塑形，实现在现有 `reward_functions.py` 的本地保留区，无独立奖励模块。
+Velocity/VelStand 及 Rough/Backlash 共八任务启用 `gait_cadence=+0.5`、`gait_overdue=-0.1`。
+步频单位为左右脚合计步数/秒：f=clamp(3+5×平移指令模长+|yaw 指令|,3,6)，
+例如 0.2/0.4 m/s 分别为 4/5 步/秒；这是未经过长期训练验证的初始参数，不是已测得的最佳步频。
+所有参数位于各奖励的 `params.cadence`，六个关联项必须使用一致参数；配置回归检查这一约定。
+有效步要求至少 0.06 s 腾空、8 mm 净空、0.03 s 稳定接触；另一脚须在最近 0.08 s 内有过稳定支撑，
+由 `support_window_s` 控制，不再要求确认落地的同一帧另一脚仍接触；允许无双支撑的换脚。
+左右交替才更新间隔，同脚重复点地不推迟超时，同时落地不计有效步。
+节奏正奖励为有界的每控制步奖励率，间隔误差 15% 内满分，超出后高斯衰减；
+乘实际有符号推进与速度跟踪门控，不能仅靠原地踏步或反向运动获得步频奖励。
+超过目标交替间隔 1.5 倍后，正奖励逐渐失效并产生有界超时成本，2.5 倍时达到最大成本。
+平移/转向指令阈值分别为 0.01，零指令关闭；躯干相对地形高度低于 0.09 m 或倾角大于 35° 时关闭并清理状态。
+指令任一分量相对上一步变化超过 0.01 时清理计时；先免罚/免奖 0.3 s，再用 0.3 s 渐入。
+两个奖励共享一次控制步更新，局部 reset 仅清理对应环境；不新增 actor 观测或固定相位时钟。
 
-### 11.1 已确认的步态基线
+八任务 `air_time` 改用同脚周期 2/f 的 25%～60% 时间窗，保留原权重 +3；
+4 步/秒时仍为 0.125～0.3 s，5 步/秒时为 0.1～0.24 s，并增加上述直立门控。
+落点时间尺度改为 clamp(0.72/f,0.12,0.24) s，4 步/秒时保持原 0.18 s；
+腾空、净空、摆动峰值和落点使用一致的平移/转向激活条件，纯转向也能启用这些项。
+净空/峰值的高度公式不变。其余站立约束、软垫相对脚滑和推进不足项仍仅在 Velocity 配置中启用，
+不能据共用步频项推断 VelStand 已具备这些额外约束。
+新增日志为 `Metrics/cadence_target_steps_per_s`、`cadence_measured_steps_per_s`、
+`cadence_valid_fraction`、`cadence_overdue`；测得步频只统计有效且尚未完全过期的交替样本，应结合有效比例判读。
+奖励/步态/配方/回放指令/任务变体定向测试 78 通过、1 GPU 测试跳过，包含 CPU MuJoCo 环境接线与 reset。
+未启动训练或 SynReal 动力学评估，尚无高速步态改善和软垫适应性的行为验收。
+新配方改变指纹，旧策略需显式迁移微调；运行中的训练不会热更新。
 
-运行：`logs/rsl_rl/microduck_mujoco/2026-10-27_10-26-04_633842_velocity_z/`。
-诊断对象是 **model_1200.pt**，不是交接时后来出现的最新文件。
-诊断时指纹 `ce48ad4c95db82afbd4c2241e83384804e0a88ffd8c5c28de2066700166df72a` 与当时代码一致，只有 Z 惩罚。
+2026-11-04 修复交替落脚判定并新增逐脚前摆反馈：上述八任务共享支撑历史修复；
+仅 `velocity` 新增 `foot_swing_progress=+0.5`，沿用该任务现有平地/软垫混合训练范围。
+新增项的 `params.cadence` 也须与其余六项一致。其余任务不自动新增前摆项。
+每脚从首次离地到首次触地记录位移，经上述有效交替落脚确认后才采样；触地后的滑动不计入，
+短于稳定接触时间的接触抖动不重置离地起点。方向在离地时由平移指令和躯干 yaw 固定到世界系，
+分别计算世界系脚位移和相对躯干位移在该方向的投影，取较小者并截去负值；
+因此单纯垫子/全身平移、身体后退或原地垂直抬脚不能代替有效前摆。后退/横移按各自指令方向计算。
+目标为 `clamp(advance_time_fraction × |v_xy_cmd| / f, min_advance, max_advance)`，
+默认 `advance_time_fraction=0.6`、`min_advance=0.008 m`、`max_advance=0.05 m`；
+0.2/0.3/0.4 m/s 直行分别约 3/4/4.8 cm。这是初始塑形尺度，未经长训调优。
+每脚得分为位移/目标截到 [0,1]，两脚取较低得分作为有界奖励率，不强制左右精确等幅；
+每份样本只保留 `freshness_cycles × 2/f` 秒，默认 1.5 个同脚周期，不迈步或重复同脚不能持续领取。
+乘有符号实际平移推进比例 [0,1]，并沿用直立、指令变化清理及 0.3 s 免奖/0.3 s 渐入；
+零平移及纯转向关闭新增项，纯转向仍由原有步频项覆盖。局部 reset 只清理选中环境。
+日志 `Metrics/foot_swing_advance_left/right` 为新鲜已确认样本的有效位移均值（米），
+`foot_swing_score_left/right` 为逐脚分数，`foot_swing_pair_valid_fraction` 为两脚样本均新鲜的比例；
+分数是完成度，不代表已乘实际推进和渐入门控，需结合 `Task/foot_swing_progress` 判断最终反馈。
+定向回归 112 通过、13 跳过，涵盖无双支撑换脚、过期支撑、单脚替代、垂直抬脚、被动平移、
+反向位移、拖脚、触地后滑动、接触抖动、后退/横移/旋转坐标系、计时缓存、部分重置和真实 CPU 环境接线。
+旧软垫接触序列 CPU 重放：保存物理的 0.3/0.4 m/s 样本均识别左/右 21/22 个落脚，
+旧同帧门控在统计窗口内均为 0/0；重放缺少真实 root 高度，固定为合格值，不能视为完整动力学回放。
+证据见 `.validation/microduck_gait_feedback_20261104/REPORT.md`。
+未启动训练或新的 SynReal 动力学评估，不能声称单脚短摆或软垫速度已改善；
+旧权重需用 `--init-from` 显式迁移到当前配方微调，不能用 `--resume` 伪装为同配方续训。
 
-MuJoCo GPU 四环境、每场景 400 步、前 100 步排除；固定指令逐帧写入 Actor，标准快速回放、无推扰。
-三场景都没有重置。这不是停走切换测试，也不是当前新增奖励的训练效果评估。
+| 本地项 | 权重 | 要点 |
+| --- | ---: | --- |
+| vertical_body_velocity | -1.0 | 世界系躯干 link-origin Z 速度平方 |
+| standing_foot_motion / standing_foot_contact | -1.5 / -0.5 | 零 twist 门控，约束脚速与双脚几何接触 |
+| hip_roll_neutral / action_over_limit | -1.0 / -0.5 | 髋侧摆偏离 HOME；目标超限 0.3 rad 余量 |
+| straight_foot_heading | -1.5 | 相对身体脚尖方向，5° 容差，转向/横移/大倾角门控 |
+| foot_slip | -0.1 | 软垫使用脚接触点相对表面切向速度；硬地保留原定义 |
+| commanded_foot_placement | 0.15 | 触地时以另一只支撑脚和速度指令计算期望落脚点；误差越小正奖励越大；无 gait clock |
+| foot_swing_progress | 0.5 | 仅 Velocity；两脚分别完成有效前摆，较弱侧限制奖励，样本会过期 |
+| foot_clearance / foot_swing_height | 2.0 / 0.25 | Velocity 净空目标从 2.5 cm 随指令速度提高，最高 5 cm；误差用有界正奖励表示 |
+| soft_pad_failure | -50.0 | 数值保护故障的失败惩罚 |
+| command_progress | -0.25 | 仅混合场景；沿指令方向的推进不足，两出生组均适用 |
+| neck_action_rate | -0.05 | Velocity/VelStand 及 Rough/Backlash：额外约束四个头颈策略输出的相邻步变化 |
+| head_angular_velocity | -0.02 | 上述八任务：头部 jaw_soft 刚体世界系 XY 角速度平方和，允许世界 Z 轴转向 |
 
-| 场景 | 平均前进速度 | 双脚同时几何接触 | 左 / 右脚相对机身 yaw |
-| --- | --- | --- | --- |
-| 零 twist | -0.00547 m/s | 2.33% | -9.31° / -0.65° |
-| vx=0.2 m/s | 0.09568 m/s | 2.08% | -9.95° / +3.49° |
-| yaw=0.5 rad/s | -0.01165 m/s | 2.25% | -7.94° / -2.88° |
+2026-11-02 头部稳定性配方调整：上述八个任务的 head_pose_tracking 保留 weight=2.0、std=0.5，
+增加 fine_std=0.1、fine_weight=0.3，以 70% 宽尺度和 30% 精细尺度混合跟踪头颈关节目标。
+跟踪项和新增 neck_action_rate 均标记 local，导出上游配置时保留。复用现有奖励函数，不改变 PD 或观测。
+相关配方、回放指令、history 测试 31 项通过；尚无新配方训练后的头部摆幅对照，不能认定晃动已经改善。
+修改奖励只影响后续训练，旧 checkpoint 回放不会自动改变；配方指纹变化，需显式迁移初始化微调。
 
-零指令下脚部仍运动，双脚各约 51% 采样有接触，复现原地踏步；不是命令覆盖导致。
-HOME 朝向检查排除了 site 固定旋转误差；前进时脚尖朝向与内八反馈一致。
-这些接触是几何标志，不是接触力测量。脚尖朝向不足以单独解释所有运动学根因。
+头部实际角速度惩罚定义在 reward_functions.py，读取 body_link_ang_vel_w，包含躯干传递的旋转，
+不以头颈关节速度替代。躯干相对地形高度从 0.09 到 0.11 m 渐入，倾角从 20° 到 40° 渐出，
+倒地/低姿态时关闭；head_pose 指令改变或 reset 后先免罚 0.3 s，再用 0.2 s 渐入。
+局部 reset 只清理对应环境的等待计时；该项标记 local 以保留导出配置。
+Metrics/head_angular_velocity_xy_rms 记录未门控的头部 XY 角速度 RMS（rad/s），
+Metrics/head_stability_gate 记录平均门控系数，Task/head_angular_velocity 为非正加权项。
+仅验证公式、实际模型头部绑定和 reset/奖励链路；未完成新配方训练后的行为改善验收。
 
-证据在仓库根 `.validation/microduck-gait/`：
-`REPORT.md`、`results.json`、`diagnose.py`、`diagnose.log`、测试日志、`train-smoke.log` 和短测 checkpoint。
-原诊断脚本断言旧指纹，不能直接拿当前奖励版运行并称为原版本重现。
+推进项对零速/纯转向关闭；速度阈值 0.03 m/s，容差 0.02，倾角≤45°；换指令后免罚 0.3 s，再渐入 0.3 s。
+脚滑按有效接触平方速度平均，不让相反方向抵消。新公式存在不等于步态已改善。
+落脚点项只在 touchdown 且另一只脚仍支撑时计费；它使用当前支撑几何、速度误差和 yaw 指令，保持 61D actor 观测契约。
+2026-11-04 按用户软垫拔脚需求，仅 `velocity` 的净空和摆动峰值目标同步提高5 mm：
+`0.025 + 0.035 × command_speed`，封顶0.05 m；直行0.2 m/s时目标由2.7 cm提高到3.2 cm。
+其他任务保留 `0.02 + 0.035 × command_speed`、上限0.045 m；Velocity混合训练的平地/软垫组共用提高后的目标。
+脚高由 `MixedTerrain.heights` 相对变形垫面测量，负净空截为0；该奖励不直接限制支撑脚压陷或碰撞穿透。
+本次仅调整四个高度数值，未进行微调训练或软垫行走行为验收；旧权重回放不会自动提高抬脚。
+官方腾空/净空/脚滑有指令门控，零 twist 踏步不能直接归因于“刷腾空奖励”。
 
-### 11.2 交接时发现的运行文件
+指令范围 vx±0.4、vy±0.3 m/s、yaw±1 rad/s，普通重采样 3–8 秒。
+六方向均有低/中/高幅值采样；每次 reset 约 20% 进入连续启停组，站 2–3 秒、运动 3–4 秒、停止后同速再启动。
+站立课程参数为 5/10/15/20/25/25%，控制步节点 0/12000/18000/24000/36000/48000。
+课程控制步每 PPO 轮增加 24，不乘环境数；条件覆盖及启停组使该参数不等于总静止帧比例。
+head_pose_bias 约 601 轮起生效并逐阶段增加；action_rate 也会加重。课程变化时不能直接比较总奖励高低。
 
-以下只说明文件检查结果，不保证进程此刻仍在运行，也不是收敛结论：
+评估至少分别记录平地/软垫：实际速度与误差、倒地次数、存活时间、倾角、起停响应、数值保护率。
+`Task/*` 是未乘 dt 的加权奖励；episode reward 还受时长影响。
+`Physics/fall_fraction` 是采样状态比例；`reset_count` 含 timeout，日志均值可能为小数，都不是 episode 摔倒率。
+`recovery_success` 的奖励均值也不是恢复成功率。分地形统计按出生组，离垫后不能冒充软接触采样。
 
-| 日志根下的运行目录 | 当次看到的最新 checkpoint | 配方关系 |
-| --- | --- | --- |
-| `microduck_mujoco/2026-10-27_10-26-04_633842_velocity_z` | model_2100.pt | 仅 Z 惩罚，与当前指纹不同 |
-| `microduck_mujoco/2026-10-27_11-09-59_978957_velocity_still_heading` | model_600.pt | 三项本地奖励，后两项 -1.5，与当前六项版不同 |
-| `microduck_synreal/2026-10-27_09-54-10_508977_synreal_velocity` | model_1200.pt | 元数据未记录本地三项奖励，与当前指纹不同 |
+## 6. 最有价值的实验结论与未解问题
 
-根目录是 `logs/rsl_rl/`；下一位 AI 应重新检查 checkpoint 和进程，不假定上表仍是最新。
+以下均是历史实验，具体条件不能套用于当前 6 m / 25 cm 网格训练。
+证据在仓库根 `.validation/`，通常不跟踪 Git；转交机器时需另保留这些产物。
 
-### 11.3 优先待办
+### 检查点筛选（2026-10-30）
 
-后续用户仍反馈轻微踏步和内八，已对 `velocity_still_heading/model_1800.pt` 做匹配配方的
-MuJoCo GPU 四环境诊断（截图未指定具体 checkpoint，选择的是诊断开始时最新的 1800）：
-零 Actor twist 确认，双脚同时几何接触约 4%；脚尖 yaw 约 -7.39°/+3.79°。
-更明显的是脚部横向间距仅 3.91 cm（HOME 8.36 cm），hip_roll 约 -22.56°/+22.55°，
-已贴近并略越过名义硬限位 ±22°（soft limit ±19.8°），HOME 仅 ±5°。
-零指令加权 foot-motion≈-0.0538、heading≈-0.00594，整体 pose≈1.7e-6；惩罚并非未注册或未触发。
-前进 0.2 m/s 实测约 0.101 m/s。更应先研究髋侧摆/窄站姿，而不是盲目增大脚尖或 Z 惩罚。
-完整记录：`.validation/microduck-gait/STILL_HEADING_1800.md` 及对应 JSON/脚本。
-上述首次诊断没有改奖励；后续用户明确授权“你来优化”，进行了以下实验。
+旧混合运行：`logs/rsl_rl/microduck_synreal/2026-10-29_17-46-16_491657_velocity_inset_pad_finetune/`。
+训练记录到 13603，最后权重 13600；1.2 m / 24×24×3 齐平垫、5/15。
+奖励/速度误差约 3000 轮后进入波动平台，**没有通过软垫运动收敛验收**。
 
-**2026-10-27 实施与受控短训：**
+评估 100/300/600/1200/6000/9300/13600；100/300/13600 各两 seed，共 10 次 16 环境、12 秒测试。
+固定保存的 1.2 m 环境、统一成熟课程，关闭噪声/推扰/摩擦随机化，保留训练边缘复位。
+前进稳定性及平地保留优先时暂推荐旧目录 `model_300.pt`：
+0.3 m/s 指令下，300 的平地/软垫 vx 均值约 0.177/0.116，13600 约 0.062/0.063。
+300 两 seed 前进档位无摔倒，但转向共 2 次失败；100 更快但前进/停步仍摔倒。
+没有穷举全部 137 份权重，不代表跨边缘或当前大垫最优，也不代表已学会软垫运动。
+报告及曲线：`.validation/microduck_selection_20261030/REPORT.md`。
 
-- 新增 `hip_roll_neutral=-1`，复用官方 `joint_deviation_l1`；单独试验与原奖励对照各追加 200 轮。
-- 两组都从同一个 `model_1800.pt` 恢复网络、优化器和归一化，延续课程；各 256 环境、24 步/轮，
-  即 1,228,800 样本。不是从零长训，也不是不同后端对比。
-- 六场景固定指令回放显示，单独髋惩罚组仍卡在 ±22.56°，零指令站距约 3.49 cm、双脚接触 3.7%。
-  原奖励对照约 3.70 cm / 3.5%，不能声称该项单独解决内八或踏步。
-- 新测到旧策略零指令髋目标角约 **-108.4°/+157.2°**，远超实际硬限位 ±22°。
-  改变策略输出后仍可能得到相同饱和力矩和限位姿态，因此仅惩罚实际角度可能难以退出这一行为。
-- 据此新增 `action_over_limit=-0.5`，复用官方目标超限函数，保留 0.3 rad 的 PD 余量。
-  这与只看实际角度的 `dof_pos_limits` 作用不同。原有 Z/静止/脚尖权重保持不变。
-- 实验脚本在 `.validation/microduck-gait/hip-roll-trial/`，记录原/新快照、实际指纹、父 checkpoint 哈希和配置。
-  这是隔离的奖励迁移实验，普通 `--resume` 检查没有放宽，原运行目录/用户训练进程没有被替换。
-- 本轮相关 30 项测试通过，含 MuJoCo CPU/GPU 注册、日志及重置。尚未完成 SynReal 行为验证。
+### 边缘、低头与后仰
 
-**髋侧摆/目标超限实验的结论：问题尚未解决，两项约束仍待从零训练验证。**
+- 1 m 齐平凹槽场景的 9000 轮回放中，记录到脚接触硬边角、向内法向及随后减速/后退。
+  保持网格间距扩大到 2 m 后，没有周边地板接触仍会在垫内摔倒；两组各 5 软垫环境/13 秒均 3 次失败。
+  所以真实边缘接触和策略内部失稳都存在，不能说“场景肯定没问题”或“只有空气墙”。
+  证据：`.validation/microduck_edge_scene_20261030/REPORT.md`。
+- 更早 1.2 m / model1000 测试中，头颈异常可发生在远离边缘、没有硬地板接触时。
+  中性头部指令仍失败，不能只归因于回放抬头指令。
+  证据：`.validation/microduck_edge_pitch_20261029/REPORT.md`。
+- 3 m / 24 网格、base_z=0 的凸起垫上，model9000、0.3 m/s：原策略 13 秒内软垫 3 次失败、平地 0。
+  仅将头颈动作替换为指令姿态后变成软垫 13、平地 2；**该干预未合入**。
+  有身体先倾倒，也有头颈先偏离；不能将固定头部当作修复。
+  证据：`.validation/microduck_head_control_20261030/REPORT.md`。
+- 鼠标拖拽曾出现 hinge 轴偏离/锚点分离与小幅越限；没有证明单关节实际连续转满 360°。
+  简单减小鼠标力未消除，下一步需检查真实角度、轴约束和连接误差。
+  证据：`logs/microduck_soft_pad/diagnostics/joint_*.json`、`joint_audit.py`。
 
-同父 checkpoint、同 200 轮预算，固定零指令回放结果如下：
+### 已修复但不能回退的基础问题
 
-| 配方 | 站距 cm | 双脚同时几何接触 | 双脚速度平方和 | 前进 0.2 指令的实测 vx |
-| --- | ---: | ---: | ---: | ---: |
-| 原奖励继续训练 | 3.70 | 3.50% | 0.02943 | 0.126 m/s |
-| 只加髋侧摆 L1 | 3.49 | 3.67% | 0.02784 | 0.117 m/s |
-| 髋侧摆 L1 + 目标超限 | 4.30 | 2.00% | 0.04163 | 0.099 m/s |
+- 2026-11-02 落脚奖励批量广播：`commanded_foot_placement_reward` 的 yaw 指令必须为 `[N,1,1]`，
+  才能与双脚位置 `[N,2,2]` 相乘。旧 `[N,1]` 在 N=5/256 时崩溃，在 N=2 时会错误混用环境的 yaw。
+  回归覆盖 N=1/2/5/256、左右脚落地、不同 yaw 和零指令；奖励/配方/回放定向测试共 37 项通过。
+  本次 `model_400.pt`、5 环境、100 帧无窗口回放尝试在 SynReal 交互登录处 EOF，未进入物理验证。
+- 2026-11-02 软垫起身穿透：`model_400.pt` 在当前 6 m / 24×24×3 凸起垫上，
+  俯卧/仰卧起身短测出现约 5–19 mm 的碰撞网格顶点穿透，垫面只下沉亚毫米量级，且保护计数为零。
+  仅看四面体体积保护不能排除机器人穿透；原 SDF 接触可能只覆盖薄部件较浅的交叠位置。
+  顶面接触补丁（现位于 `scenes.py` 的 `PadVertexContacts`），在每次完整碰撞生成后补充网格部件最低顶点与本世界变形顶面的重心坐标接触，
+  使用原生软接触刚度/阻尼求解，不移动状态或添加硬盖板；平地组、垫外和底面以下不补充顶面支撑。
+  普通 SDF、侧面/底面和解析形状接触仍走原路径。相同碰撞 generation 重查不会重复添加记录。
+  `MixedTerrain.check_contacts()` 同时覆盖训练、普通回放与独立软垫场景；元数据记录
+  `vertex_face_contacts=lowest_mesh_vertex_top_surface_v1`，配方指纹包含新模块。
+  旧 checkpoint 可显式 `--allow-recipe-mismatch` 诊断回放；接触行为已改变，不能冒充旧配方严格续训。
+  证据、固定动作对照、测试与限制见 `.validation/microduck_penetration_20261102/REPORT.md`。
+- 局部 reset/push 曾改写其他世界；现已做选中世界 FK/proxy/drive-history 隔离。
+  `tests/test_state_isolation.py` 有两后端 GPU 用例；保留此契约。
+- 旧安装原生扩展曾让软垫世界影响平地世界运动。更换仓库二进制的历史对照中，纯平地/半垫场景的
+  平地组 vx 从 0.1335/0.0801 变为 0.1837/0.1837 m/s，消除了所测严重跨世界减速。
+  证据：`.validation/microduck_flat_mixed_comparison/`，含哈希、备份、固定动作与回放对照。
+  不代表全部环境数敏感性或软垫步态已解决；复发时先核对实际加载库，别盲目加迭代次数。
+- 数值发散历史中 implicit Euler 优于旧 Midpoint-Cayley 故障回放；保留 `stability.py` 保护。
+  证据：`.validation/microduck-stability/REPORT.md`。
+- `train` 无探索诊断与 `play` 首帧动作一致，之后小物理差异会放大；重复同一 play 也出现类似差异。
+  尚未定位原生重复运行差异，不能据此单独指控训练入口。
+  证据：`.validation/microduck_train_play_diagnostic/`。
 
-组合组零指令髋目标角收回到约 -39.9°/+35.3°，但实际髋角仍约 -21.95°/+22.19°；
-过大目标改善，不能等同于站姿纠正。脚部运动增加、前进跟踪低于等预算对照，不能把该短训称为步态改善。
+后续优先：按当前运行实际配置检查曲线与每数百轮 checkpoint，固定指令分开评估平地和软垫。
+若做长距离假设验证，应明确控制网格间距、材料、求解、出生、指令和 episode 边界；记录实际连续运动时间。
+不要同时改奖励、材料、求解和头部控制后再声称找到单一根因。
 
-随后从组合组同一个 `model_2000.pt` 出发，各用 256 环境追加 100 轮，单独比较静止脚部权重 -1.5 / -6：
-零指令双脚速度平方和约 0.04066 / 0.04008，改善不足 2%；yaw 漂移从 -0.105 增至 -0.400 rad/s。
-转向指令 +0.5 时两组实际 yaw 为 +0.024 / -0.254 rad/s，均未良好跟踪，后者还反向。
-因此 **-6 已回退**，当前仍为 -1.5；该轮未增加双脚着地项。
-这些微调 checkpoint 只用于诊断，不推荐作为已修复策略演示。
+## 7. StandUp 与官方适配边界
 
-当前保留 `hip_roll_neutral=-1`、`action_over_limit=-0.5`，理由是约束已测到的限位利用行为；
-这不构成两项会改善从零训练的证据。下一步应在新配方下从零学习，并与原配方从零训练按相同预算对照；
-不要继续仅用已饱和旧策略的很短微调结果判断最终效果。需要检查是否重新顶限位、是否停稳及是否损害指令跟踪。
-普通 `--resume` 仍拒绝旧指纹；源配置改动不会自动改变旧 checkpoint 的动作。
+StandUp 已复用官方奖励和出生课程。独立官方 Python 构造配置后与本地快照逐项核对，20 个奖励均有实现；
+Actor 61 / Critic 68。仍使用共享 PD，缺双脚力、部分随机化，自碰撞默认无有效信号。
 
-评估使用 4 环境、固定 HEAD_UP、保留偏差/延迟、关闭逐步观测噪声及推扰；区分超时和非超时重置。
-上述全部六场景回放都没有重置；短训仅单种子，部分时间与用户训练/其他实验共享 GPU，
-不能据此认定长期收敛或真实机器人效果。详细结果见该目录 `REPORT.md` 和 `eval-*.json`。
-`.validation/` 是本机忽略目录，对外复现需单独归档脚本、快照、日志和 checkpoint；关键结论已保留在本文。
+`configs/rtx4090_synreal_standup.json` 选择 SynReal / standup / official 平地、15000 轮。
+保留任务 PPO：rollout24、save250、adaptive LR 初值0.001、entropy0.01；不从 Velocity 传 resume/init-from。
+回合 6 秒，倒地不立即终止；站立/坐姿/俯卧/仰卧出生概率依次为：
+0 轮 40/40/20/0%，600 轮 25/30/35/10%，1500 轮 20/25/30/25%，2500 轮 15/20/30/35%。
+仰卧保留 ±90° 扰动，不是任意姿态恢复保证。
 
-**随后针对零指令踏步补充静止接触目标（2026-10-27）：**
+历史验收：50 项相关回归；StandUp GPU 套件 13 项；64 环境×5 轮真实 PPO 完成。
+该短训权重在坐姿/俯卧/仰卧各 4 环境评估均 0/4 起身，不能称为技能成功。
+证据 `.validation/microduck_standup_port/`；入口验收未启动 15000 轮正式训练。
 
-用户继续要求修复原地踏步。现有脚速平方项对完全悬空但不动的脚返回零；
-此前也已测到踏步时双脚同时接触仅约 2%～5%，而单纯增大脚速权重无效并损害转向。
-本轮仅增加 `standing_foot_contact=-0.5`，没有继续增大脚速权重或改变课程/引擎。
-当真实 twist 的平移范数 ≤0.01、yaw 绝对值 ≤0.01、倾角 ≤35° 时，每只未落地脚计一个单位成本。
-头部指令不关闭站立约束，移动/转向/大倾角则关闭，允许行走、转弯和恢复平衡。
+评估强制起点类别，关闭逐帧噪声/自动推扰，保留姿态随机化及传感器偏差/延迟。
+判据为躯干高度≥0.10 m、倾角≤20°、双脚几何接触连续 0.5 秒；分别报告到达率、结束保持率和首次保持时间。
+超时后的站姿复位不能计成功；几何判据不等于严格承重验证。
 
-验证结果：
+官方 VelStand 路线为 Velocity + StandUp 专家 → Velocity 热启动学生 → PPO + 双教师 BC，最终是一个学生策略。
+本地已新增 `distillation.py`：SynReal 平地、无自碰撞、history 网络的 Velocity → VelStand 热启动与双教师 BC。
+原来的不带教师参数的 VelStand 仍是随机初始化普通 PPO，不能视作完整融合流程。
 
-- MuJoCo GPU 四环境、HOME 零动作保持 400 步，排除前 100 步：双脚接触率 **100%**、无重置，
-  双脚速度平方和约 2.60e-8。该姿态在当前 PD 下可以静止；这不是训练策略的成功率。
-- 每只落地脚常有约 4～5 个几何匹配，因此使用每脚布尔接触，不能对原始匹配总数截断来判断双脚落地。
-- 对不变的旧 `model_1800.pt` 做显式允许配方不匹配的只读诊断，每场景 300 步、排除前 100 步：
-  零指令双脚接触率 5%，旧脚速加权项约 -0.0573、新接触加权项 **-0.475**；前进 0.2 和转向 0.5 时两项均为 0。
-  三场景无重置。此结果证明新奖励会处罚已观测的踏步行为，不代表旧策略已改善。
-- **31 项测试通过**，包含左右脚独立计数、静止悬空、双脚离地、头部/平移/侧移/转向/倾角门控、任务范围，
-  以及 MuJoCo CPU/GPU 注册、日志、重置检查。
-- 新配方 MuJoCo 64 环境、5 轮 PPO（7,680 样本）启动、训练、保存完成；这仅是功能短测。
-  没有运行从零长训练，也没有本轮 SynReal 行为验证，不宣称已经学会停稳。
-
-证据：`.validation/microduck-gait/stand-contact/` 内的 `home_probe.json`、`policy_probe.json`、`tests.log`、
-`train_smoke.log`；保存了修改前的 `baseline_recipe.py` 和 `baseline_snapshot.json`。
-旧实验脚本的指纹断言在当前源码下可能不再通过，应使用归档源码做隔离复现，不修改旧运行元数据绕过检查。
-下一轮从零训练可用：
+### SynReal history 双教师入口（2026-11-01）
 
 ```bash
-python -u -m examples.microduck.train \
-  --training-config examples/microduck/configs/rtx4090_synreal_official_adapted.json \
-  --solver mujoco --task velocity --run-name velocity_standing_contact
+# First run a short GPU smoke test; this command starts actual training.
+.venv/bin/python -m examples.microduck.train \
+  --training-config examples/microduck/configs/rtx4090_synreal_velstand_history.json \
+  --num-envs 64 --iterations 5
+# After validating the teachers and smoke run, omit those overrides for the configured training budget.
 ```
 
-新奖励在 MuJoCo/SynReal 共用配方中，仅对精确 `velocity` 启用。旧模型不会因改奖励自动停止踏步。
+配置中的 `training.velocity_teacher`、`training.standup_teacher` 可自由更换为兼容的 checkpoint 路径；
+也可用 CLI `--velocity-teacher` / `--standup-teacher` 覆盖。目录输入在新运行启动时解析为编号最大的文件。
+默认配置暂固定用户提供的 Velocity `model_25750.pt` 与 StandUp `model_5250.pt`，不是最佳权重推荐。
+StandUp 继续训练后，只需替换 `standup_teacher`，再启动新的 VelStand 实验；无需改源码。
+参数与 SHA256 会写入新运行 `config.json`。运行中不热换教师，不读取后续新生成的 checkpoint。
 
-**`velocity_stand_contact/model_1500.pt` 的后续核查与站立课程修改：**
+学生继承 Velocity 的 Actor/Critic、两套历史编码器、动作 std 与双归一化。
+默认 `ppo.teacher_bc.warm_start_optimizer="inherit"`，与官方一样继承 PPO Adam 动量、步数及参数组设置，
+包括 checkpoint 当时的学习率；同步 PPO 自适应调度器的 LR 标量，避免下一次更新覆盖恢复值。
+有效初始学习率记入 `velstand_warm_start.effective_ppo_learning_rate`；新任务仍使用配置中的 PPO 调度策略。
+设为 `"reset"` 可清空 PPO Adam，并使用新任务 `ppo.algorithm.learning_rate`。BC Adam、轮次及课程始终从零开始。
+继承前检查参数布局、动量形状及有限性；不能与 `--resume` / `--init-from` 混用。
+要求两位教师同为 SynReal history、当前观测契约、14 维 HOME 偏移 PD、同物理配置；支持不同 Critic 维度。
+学生允许在保持控制周期不变时整数倍细分教师的物理步长，以及增加关节约束 primal 求解次数；
+不允许粗化时间步、减少关节求解次数或修改其他求解参数。数值细化仍会改变仿真轨迹，不代表动力学完全相同。
+`training.physics_substeps` / `--physics-substeps` 只细分每个控制步，history 仍按 50 Hz 更新。
+当前 VelStand JSON 采用 8 子步（dt=0.0025），其他任务的 env.py 默认 4 子步保持原值；保存间隔改为 50 轮。
+原因是 2026-11-01 的 1024 环境双教师训练在原 5 ms 设置下出现仿射代理变形、关节约束偏离与速度发散。
+同批次固定动作纯物理重放可重现异常，2.5 ms 细分明显改善；完整训练验证状态见
+`.validation/microduck_velstand_failure_20261101/REPORT.md`，不能用短测代替长期稳定性与技能验收。
+该修复已通过 299 项回归（17 跳过）、实际双教师 64 环境×5 轮新训、2 轮严格续训和 100 帧回放。
+从此前失败的第 100 轮诊断权重显式迁移至细分物理后，1024 环境连续完成第 101–160 轮，跨过半蹲出生课程，
+未触发保护且仿射代理行列式保持正值。正式新运行的 PID、日志位置见该验证目录的 `repaired_training.json`；
+它使用原定两位教师重新热启动，保留用户当前 60000 轮预算，不改写旧运行或教师元数据。
+用户随后明确要求 512 环境持续训练：已等上述 1024 环境运行保存 `model_50.pt` 后切换为 512 环境严格续训，
+追加 59949 轮以完成总计 60000 轮，保留优化器、双教师和课程进度；继续使用 2.5 ms×8 子步。
+上述 512 环境运行后来在第 825 轮附近再次失稳；`repaired_training_512.log` 是已退出运行的日志。
+最新进程与运行目录仍以 `repaired_training.json` 为准，新的恢复记录见下文。
+512 是此次显式 CLI 设置，不修改其他任务共享的 env.py 环境数默认值；不得为检查而中断健康训练。
+预训练技能和 VelStand 碰撞模型下的迁移效果仍需分别评估，参数兼容不代表教师已学会技能。
 
-用户明确提供该 checkpoint 的 MuJoCo 回放命令（单环境、摩擦随机化、`--allow-recipe-mismatch`）。
-核查时源码与模型指纹均为 `86d328...`，允许不匹配开关不是本次问题的原因。
-四环境 GPU 全步进诊断与当前回放使用相同 PD/观测配置，关闭逐步 Actor 噪声和推扰、保留偏差/延迟，
-固定真实 Actor twist 逐帧写入。每场景 300 控制步，排除前 100 步，头部使用回放默认 HEAD_UP。
-与 Viewer 快速步进不是逐轨迹一致的比较；未据此宣称完全重现单环境截图。
+### 2026-11-01 15:43 VelStand 再次失稳与关节求解细化
 
-| 场景 | 双脚同时几何接触 | 双脚速度平方和 | 平均 vx | 非超时重置 |
-| --- | ---: | ---: | ---: | ---: |
-| 出生后零指令 | 28.88% | 0.03035 | -0.00085 m/s | 0 |
-| 前进指令 0.2 | 3.75% | 0.08960 | 0.10685 m/s | 0 |
-| 前进后停止 | 4.63% | 0.03972 | +0.00257 m/s | 0 |
+2.5 ms×8 的此前修复只缓解了问题，不能称为已彻底解决。失败运行
+`2026-11-01_14-31-11_574205_velstand_history_dual_teacher_512` 在 control_step=19809、substep=6，
+环境 57 的角速度从 864.595 增至 1125.647 rad/s，触发原有 1000 rad/s 保护。
+前一帧峰值在左踝，失败帧在左髋；本次不能沿用旧头颈失稳结论。PPO/BC 与最后 `model_800.pt` 均有限。
+原设置恢复诊断在落地时重现严重角速度增长，且发生在同一个策略动作持有期间；
+证据指向冲击下约束求解/积分失稳，尚未定位到具体原生 C++/CUDA 缺陷。
 
-- 站距约 8.7 cm、hip_roll 约 -4.0°/+3.75°，改善与用户内八反馈一致。
-- 出生零指令场景四环境的双脚接触率分别约 6%、100%、5%、4.5%；只能说明一个环境在这段窗口能持续落脚。
-  前进后停止时四环境都继续踏步，每只脚约每秒 2.3 次新触地；平移速度接近零不等于脚静止。
-- 真正零 twist 下 `air_time=0`。出生静止/接触加权项约 -0.0455/-0.3556；停走后约 -0.0596/-0.4769，
-  两项均已生效，不能再说接触奖励漏接或踏步在刷腾空奖励。
-- 额外比较头部零指令：出生零 twist 的双脚接触率约 32.88%，脚速平方和约 0.03015，仍有踏步。
-  只完成该场景，随后停止额外 GPU 诊断以避免争用；没有完整的中立头部停走测试结论。
-- 仅诊断中强制腿部动作归零、头部继续由策略控制，出现 **21 次非超时重置**。
-  不能把此前“所有关节 HOME 可静止”的结果推广到“抬头策略也能靠冻结双腿稳定站立”；本轮没有加入动作冻结。
-- 旧课程在最初 500 轮只有约 1.7% 的零 twist 重采样机会；1500 轮附近才提高到约 17%。
-  当前假设是站立及停走经验不足以形成稳定切换，故采用第 8.3 节课程；没有声称该假设已被因果实验验证。
+本次只把 `joint_constraint_primal_iterations` 从 1 增到 4；2.5 ms×8、控制/动作/历史 50 Hz、
+非线性 5 / 线性 35、PD、奖励及双教师保持原配置。VelStand JSON 已加入此参数，CLI 可显式覆盖。
+固定动作对照显示角速度峰值下降，但未恢复全部原生求解缓存，不能声称精确重放了原异常。
+正式恢复使用原运行 `model_800.pt`，保留 PPO/BC 优化器、学生归一化、冻结教师与课程，从 801 继续；
+新目录记录 `solver_transfer_from`、源哈希与前后物理参数，禁止改写旧配置伪装严格同配方续训。
+512 环境、总计 60000 轮；测试中人为跳到最终课程的权重不能用于正式恢复。
+复现、压力测试、恢复脚本与状态位于 `.validation/microduck_velstand_recurrence_20261101/`，
+详细验收以该目录 `REPORT.md` 为准。已通过 301 项回归（17 跳过）、512 环境原课程 80 轮、
+最终课程 40 轮、2 轮迁移短训及 1 轮标准严格续训；原课程测试最高角速度分量 216.087 rad/s，
+最小仿射代理行列式 0.587801，均未触发保护。正式恢复启动 PID=3171780，任何后续操作须重查状态。
+后台脚本保留异常前 128 个物理子步轨迹，保护阈值不放宽，
+不静默复位失稳环境，也不无条件循环重启。新日志使用该目录 `training.log`。
+有限轮次测试不等于长期数值稳定或技能收敛验收；查看实时 `training_status.json` 后再报告进度。
 
-本轮 **35 项测试通过、1 项 GPU 测试跳过**，包括 4 个阶段各 20,000 次真实 CPU 指令采样，
-核对零命令概率、原地转向概率、任务范围和导出保留；CPU 单环境 2 PPO 轮/48 样本训练及保存通过。
-没有追加 GPU 训练，没有修改用户运行中的训练或另一个 SynReal 进程。新课程的训练效果尚未验证。
-证据：`.validation/microduck-gait/stand-contact-1500/`，含完整诊断、头部比较、修改前源码/快照和测试/CPU 短测日志。
-旧实验脚本断言旧指纹，需使用对应源码复现。
+每个控制步在学生归一化之前捕获原始当前帧与 10×48 历史，计算冻结教师标签。
+两个教师各用自己的 Actor、历史编码器和冻结归一化；历史包含学生实际执行动作，不改写为教师动作。
+倾角 <25° 由行走教师监督，>35° 由起身教师监督，中间区间交给 PPO。
+起身教师当前 twist 槽清零；历史不含指令槽。站立且带身体指令的帧退出行走监督，
+其中纯姿态倾斜交给起身教师，带高度指令的直立帧只走 PPO。
+未照搬官方教师专用 yaw remap 或 >75° 关节屏蔽。
 
-后续评估优先看同一运行的 2000/3000 及之后 checkpoint；1500 轮附近刚发生动作平滑、头部和站立课程变化。
-这些轮数是比较节点，不是保证停稳的收敛阈值。新站立课程只对新启动训练生效，普通 `--resume` 仍禁止跨指纹。
+每轮 PPO 后进行 BC，混合并打乱两类有效样本，逐样本动作 MSE 乘教师系数后取批均值，与官方聚合方式对齐。
+仅更新学生 Actor 和 Actor 历史编码器。默认 BC LR=3e-4、epochs=5、mini_batches=4、min_mini_batch=512，
+批大小为 max(512, 有效样本数整除4)，余数单独成批；只对起身组设至少64样本门槛，行走组不设门槛。
+两位教师系数默认均1；这些设置已显式写入训练 JSON 的 `ppo.teacher_bc`。
+BC 缓存原始当前帧和历史，使用 PPO 更新结束时的最新学生统计量归一化，BC 期间不更新统计量。
+日志保留 `Loss/bc_walk_fraction`、`Loss/bc_stand_fraction`、`Loss/teacher_bc`、`Loss/bc_updates`，
+并增加每位教师的 `bc_{walk,stand}_{samples,selected,mse,updates}`：门控样本数、实际选中数、未加权 MSE、参与批数。
+MSE 为本轮各次 BC 更新前误差的样本加权均值；没有有效样本时记0，必须结合 selected 看，不能当成完美拟合。
+初期未采到倒地样本时起身 BC 可以为零；不能将 BC 下降当成恢复成功率。
 
-1. 验证新约束从零训练的结果：零指令、行走后停止、重新起步、转向、侧移。
-   记录真实 Actor 指令、脚部速度/接触、机身 vz、足部 yaw、速度误差及重置原因。
-2. 检查新约束是否导致僵硬、单脚悬停或速度跟踪进一步变差；权重 -1.5 不是已验证最优值。
-   当前静止接触项已实现，但仍需新训练对照；特别检查是否出现双脚滑动、单脚长期悬停或失去起步能力。
-3. 在相同任务/配置/采样量/物理开关下比较 MuJoCo 与 SynReal；当前两条长期实验指纹不同，不能直接归因引擎。
-4. 对 StandUp、BallKick、VelStand 分开评估任务成功。高奖励或能站着不证明会起身/踢球。
-5. 用户决定采用官方教师路线时，再做显式 warm-start/双教师接口；或者独立设计无教师课程。
-6. BAM、物理随机化、接触力及 Rough/Backlash 全面动力学验证属于进一步官方对齐工作，尚未完成。
+BC 契约已升至 v2；旧 v1 学生仍可独立回放，但不允许静默按新训练语义续训。
+学生 checkpoint 内嵌冻结教师状态和 BC 优化器；严格续训从该 checkpoint 恢复原教师，
+不要求原教师文件仍存在，也不接受通过改 JSON 偷换教师。更换教师继续训练已有学生尚无单独入口。
+回放只构造学生，不加载教师；细分物理步长的新权重回放需加 `--use-checkpoint-environment`。
+严格续训用 `train --solver synreal --resume <VelStand/model_N.pt> --use-checkpoint-environment`，
+不要再传带教师初始化参数的训练 JSON。物理细分是显式环境变化，不能伪造旧运行元数据按原配方续训。
 
-<a id="validation"></a>
+全目录 CPU/非 opt-in 回归 245 通过、16 跳过；真实教师完成单世界 MuJoCo CPU 两轮诊断，
+冻结教师不变、BC 更新与学生独立回放通过。验证范围及复现脚本见 `.validation/microduck_velstand_bc_20261101/`。
+本轮为代码接入与 CPU 验证，未启动正式融合训练；SynReal GPU 双教师短训与行为收敛需另行验收。
+2026-11-01 官方对照复核：快照八个配置部分与仓库内官方构造结果一致，20 项定向测试通过；
+此后 v2 优化已对齐 BC 聚合、默认 warm-start 优化器继承及 BC 学生归一化时机；物理/奖励缺项仍存在。
+初次对照见 `.validation/microduck_velstand_bc_20261101/OFFICIAL_AUDIT.md`，
+v2 全目录回归 249 通过、16 跳过；真实教师两轮 CPU 诊断通过，Adam 继承后的初始 LR=7.59375e-5。
+v2 验证见 `.validation/microduck_velstand_bc_v2_20261101/REPORT.md`。
 
-## 12. 验证方法与交付标准
+本地注册 33 任务仅表示代码入口覆盖，不表示 33 个技能均收敛：
+基础 13 项 velocity、velstand、standup、sitstand、groundpick、ballkick、rollers、swizzle、
+rollercrouch、rollerslope、rollerstandup、spin、roulade；另有 5 Rough、10 Backlash、5 Rough+Backlash，
+精确名称见 `task_registry.py`，不虚构组合。
 
-日常检查：
+官方复现仍缺 BAM、部分动力学随机化和力/冲击奖励；本地可选双教师 BC 的输入映射与优化契约见上文，
+不包含全部官方教师专用修正。地形为 seed42 固定样本。
+以运行元数据 `official_alignment` 的 supported/omitted/approximate 字段判断，不以快照中有名称判断已有效执行。
+`deployment_compatible=False`；本地 PD checkpoint 不能宣称直接真机部署。
+
+## 8. 常用命令与验证
+
+命令从仓库根执行；启动前核对已有进程与 GPU 负载。模型旁保留 `config.json`。
+
+```bash
+# Replay a specific checkpoint with its recorded environment.
+.venv/bin/python -m examples.microduck.play --solver synreal \
+  --checkpoint logs/rsl_rl/microduck_synreal/2026-10-29_17-46-16_491657_velocity_inset_pad_finetune/model_300.pt \
+  --use-checkpoint-environment --allow-recipe-mismatch \
+  --num-envs 10 --pad-probability 0.5 --viewer gl --command 0.3 0 0 --num-frames 30000
+
+# Train the separate StandUp expert; do not transfer a Velocity checkpoint.
+.venv/bin/python -u -m examples.microduck.train \
+  --training-config examples/microduck/configs/rtx4090_synreal_standup.json \
+  --num-envs 1024 --iterations 15000
+
+# Replace the placeholder with an actual StandUp checkpoint.
+.venv/bin/python -m examples.microduck.evaluate_standup --solver synreal \
+  --checkpoint "<standup_run>/model_14999.pt" --num-envs 8 --viewer null \
+  --episodes 3 --output logs/standup_evaluation.json
+
+# Optional local workbench; credentials are entered privately in the terminal.
+.venv/bin/python -m examples.microduck.ui --login
+
+# Use a free port to inspect the new run without replacing the existing old-run dashboard.
+.venv/bin/tensorboard \
+  --logdir logs/rsl_rl/microduck_synreal/2026-10-30_14-46-36_838789_velocity_inset_pad_finetune \
+  --host 127.0.0.1 --port 6007
+```
+
+回放 I/K 前后、J/L 横移、U/O 转向、X 零速；用 `--pad-probability 0|1` 分开看两种地形。
+上面的回放诊断允许配方差异，不是旧训练代码的严格复现；恢复环境后仍执行回放专用边界。
+
+训练入口对照可显式使用 `--init-from ... --diagnostic-no-exploration --num-frames ... --command 0.3 0 0`：
+均值动作、冻结权重和归一化、不运行 PPO、不保存模型，关闭观测噪声/interval events，仍直接调用训练 env.step。
+摩擦仍取训练设置；对齐默认 play 需另加 `--no-randomize-foot-friction`。
+普通训练不要带此开关，`--command` 也不控制普通 PPO 指令采样。
+带 viewer 的训练命令更新路径与无窗口训练仍有差异，不能笼统说开窗口仅影响渲染。
+
+工作台 `http://127.0.0.1:8765` 支持独立多实验/预览，关闭预览不停止训练。
+关闭网页不停止子进程，但控制台终端 Ctrl+C 会停止其拥有的子进程；不接管外部终端训练。
+预览加载最新完整保存权重，不自动热更新。多实验共享 GPU；不自动排队或融合策略。
+
+按代码影响选择回归，不为纯文档修改跑全套 GPU：
 
 ```bash
 WARP_CACHE_PATH=/tmp/microduck-warp-cache .venv/bin/python -m pytest -q examples/microduck/tests
-git diff --check
-```
-
-最新步态修改对应的定向测试：
-
-```bash
+# Opt-in GPU tests require available CUDA and normal SynReal authentication.
 MICRODUCK_GPU_TESTS=1 WARP_CACHE_PATH=/tmp/microduck-warp-cache \
-  .venv/bin/python -m pytest -q \
-  examples/microduck/tests/test_gait_rewards.py \
-  examples/microduck/tests/test_vertical_reward.py \
-  examples/microduck/tests/test_official_recipe.py \
-  examples/microduck/tests/test_play_commands.py
+  .venv/bin/python -m pytest -q examples/microduck/tests/test_state_isolation.py
 ```
 
-- `test_gait_rewards.py`：零指令脚部 xyz 运动、头部不误罚、转向/侧移/大倾角门控、yaw 跨 ±π、HOME 轴、注册日志/重置；
-  髋侧摆关节选择和大偏差纠正、物理顶限位时策略目标纠正仍有奖励差异、PD 超调余量和任务作用范围；
-  静止接触项区分落地/悬空，单脚多个匹配不能替代双脚接触。
-  本地站立课程的实际指令分布、转向保留、元数据与导出保留也在该文件验证。
-- `test_vertical_reward.py`：竖直速度正反对称、水平不误罚、权重/dt、任务范围和真实 CPU 环境。
-- `test_play_commands.py`：命令持续写入、zero padding。
-- 官方配方/观测/传感器/任务变体测试：来源 AST、关节映射、局部重置和课程边界等。
-- `test_synreal_stability.py`：需要 CUDA、有效登录及 `MICRODUCK_GPU_TESTS=1`；运行前查看条件。
-  不要为普通文档修改启动 SynReal 登录或完整 GPU 测试。
-
-真实变更验证至少按影响覆盖动作响应、有限状态、重置、奖励/观测/事件；GPU 短测先小环境少迭代。
-报告时区分：代码已实现、单元测试通过、物理/PPO 短测通过、长期收敛验证。
-不把 CPU 测试说成 SynReal GPU 动力学验证，也不把过去的测试计数当成本轮执行结果。
-
-`Task/*` 是加权项（未乘 dt）；`Physics/fall_fraction` 是采样状态比例，不是 episode 摔倒率。
-`Physics/reset_count` 为累计重置数，rollout 日志平均后可为小数，包含超时；不是该轮新增失败次数。
-`recovery_success` 是事件奖励的均值，不是回合恢复成功率。
-训练 `steps/s` 是全部环境合计吞吐，不是窗口 FPS；GPU 并行负载、材质、碰撞和编译都会影响耗时。
-
-<a id="history"></a>
-
-## 13. 历史问题与证据边界
-
-### 13.1 SynReal 数值故障与扩展版本
-
-2026-10-21 的 VelStand 曾在约 240 轮发生巨大有限数值，随后价值损失 inf。
-新增 `stability.py` 在每物理子步检查位置分量 >1000 m、线速度分量 >100 m/s、角速度分量 >1000 rad/s 或非有限值，
-保存 `logs/microduck_diagnostics/*_unstable.pt` 后报错。阈值是诊断保护，不是奖励裁剪或官方任务终止。
-
-故障前状态回放中，旧 Midpoint-Cayley 在第 2 物理步复现发散；脚踝单步约 176.5° 旋转后的反解角速度被放大。
-改为 implicit Euler 后同状态连续 100 步通过，保留异常保护。不能由此推断更早的全部故障来源或长期稳定性。
-证据：`.validation/microduck-stability/REPORT.md`。
-
-2026-10-27 曾报 `style3d_sim._core.Model` 无 `cable_count`：根 `.venv` 旧原生扩展与当前 Python 源不匹配。
-当时执行 `uv pip install --python .venv/bin/python -e . --no-deps --offline`，核对二进制哈希和字段可写。
-这是已做过的环境修复记录，不要求每次接手都重装；该次检查没有完成 SynReal GPU 步进验证。
-
-早期会话中的“无 CUDA 驱动”是当时环境限制；后续步态诊断已实际使用 RTX4090 / MuJoCo GPU。
-不要复制成当前机器永久没有 GPU，也不要反过来把后续 MuJoCo 验证算作 SynReal 验证。
-
-### 13.2 训练失败与回放修复
-
-- `microduck_mujoco/2026-10-26_23-17-43_618423_mujoco_velstand`：历史分析末 100 轮
-  fall_fraction≈0.986、upright≈-0.013；100 轮附近取消立即倒地终止后退化。
-  随机初始化、无 BC 却使用热启动课程是重要不等价证据，不是已排除全部动力学原因。
-- `microduck_mujoco/2026-10-26_23-27-31_611798_mujoco_ballkick`：历史日志到 3430 轮，最新当时为 model_3300.pt。
-  末 100 轮 ball_forward_velocity 加权项≈11.40，fall_fraction≈0.922；不能用高总奖励证明站立踢球成功。
-- BallKick 回放曾把训练为零的头部槽强制抬头，归一化后输入幅度约 34.9；已修复 zero padding。
-  Velocity/VelStand 指令被 reset/采样覆盖的问题也已修复为逐帧写入。
-- 早期 SynReal Velocity 约 21000 轮 episode≈999.2/1000、upright≈0.9987；MuJoCo 约 1200 轮 episode≈1000。
-  两实验指纹、摩擦设置不同，不能由此直接比较引擎；这些数值也不能证明步态自然。
-
-### 13.3 验证历史归档摘要
-
-以下归并原 VALIDATION/OFFICIAL_PORT_STATUS 的记录，均标记版本，不重新宣称本轮已执行：
-
-| 阶段 | 当时验证 | 证据 / 限制 |
-| --- | --- | --- |
-| 2026-10-20 旧简化版 | 两后端 2 环境、2 PPO 更新、96 样本、50 帧回放；MuJoCo 续训 | `restructure_smoke` 运行；旧配方已删除 |
-| 同日旧物理检查 | MuJoCo / SynReal / 旧 CUDA graph 各 150 帧保持与重置 | 不适用于当前“共享无 graph”实现 |
-| 2026-10-21 官方四任务版 | 公式/观测/传感器测试与两后端各 4 环境短测，保存/加载 | `.validation/microduck-v2/`、`.validation/microduck-sensors/` |
-| 四任务实际入口 | SynReal VelStand 新训练→续训→回放；后期课程/推扰 | `audit_entrypoints.log`、`cleanup_synreal.log`、`cleanup_mujoco.log` |
-| 专用回放 | 33 项 CPU 测试；两后端同状态观测与有限状态检查 | `.validation/playback/`；不保证独立接触轨迹逐位一致 |
-| 训练吞吐审计 | 4 环境核实 24 控制步 / 96 子步 / PPO 参数更新 | `.validation/training_audit/result.log`；非 1024 环境性能结论 |
-| 2026-10-27 全任务扩展 | 历史记录：33 任务早/后期 CPU 短步进，Roulade 一次 PPO/镜像损失 | 非全部任务 GPU 收敛验证 |
-| Z 惩罚 | 初期 21 项相关测试，含 CPU 三步 | 非步态改善验证 |
-| 静止/朝向惩罚初版 -2.0 | 28 项相关测试；MuJoCo GPU 4 环境 2 PPO 轮；定向复跑 5 项 | `.validation/microduck-gait/`；未训练验证最终质量 |
-
-旧简化版曾测得 MuJoCo 回放 36.2→293.7 FPS、SynReal 9.2→12.1 FPS，依赖当时的 graph/模型，不能套用当前版本。
-后来的共享 PD 快速回放历史测量（单环境零动作、无网络/渲染）如下，仍不是实时 50 Hz 保证：
-
-| 任务 | SynReal 完整步 / 快速步（控制步每秒） |
-| --- | --- |
-| Velocity | 9.55 / 15.72 |
-| VelStand | 8.57 / 15.66 |
-| GroundPick | 9.73 / 15.86 |
-| BallKick | 9.62 / 14.79 |
-
-历史日志 `logs/microduck_play_baseline.json`、`logs/microduck_play_after.json`、
-`logs/microduck_task_cli_verification.json` 可帮助追溯，不是当前入口依赖。
-历史 fixed-friction / self-collision 开关和 10 子步记录已被新配置替代。
-不要重新引入“四任务限定”“只支持平地”“始终固定摩擦”“回放始终保留噪声/推扰”等过时描述。
-
-<a id="sources"></a>
-
-## 14. 导出、来源与后续文档维护
-
-本地适配优先改 `official_recipe.py` 等适配层；生成公式和官方源保持可追溯。
-不得仅为让测试通过而同步改官方源与生成文件。奖励符号要核对函数返回值，有些官方惩罚函数自身为负。
-
-重新导出使用官方独立环境，操作会修改源码/快照和指纹，不要在纯排查或文档整理时顺手运行：
-
-```bash
-examples/microduck/microduck_rl-develop/.venv/bin/python examples/microduck/export_official_recipe.py
-examples/microduck/microduck_rl-develop/.venv/bin/python examples/microduck/export_terrain.py
-```
-
-配方导出保留快照现有的 `local: true` 奖励和课程，包括其参数和权重；不代表所有其他手工修改都会保留。
-变更后检查实际支持/省略项、公式来源、观测维度、任务表和指纹，再做必要短测。
-
-此前文档归并阶段仅改顶层 Markdown，检查了本地链接、源码索引迁移完整性及当时配方指纹不变；
-未重跑训练或声明新的物理验证结果。仓库根的历史知识库不在本次合并范围，读取时按日期记录处理。
-
-后续只更新本文中的当前事实、问题和验证记录，不再创建重复的本地项目总览。
-原官方资料保留在子目录：
-
-- [官方训练工程规则](microduck_rl-develop/AGENTS.md)：BAM、14 舵机、61D 观测、奖励符号和 sim-to-real 经验。
-- [VelStand 训练记录](microduck_rl-develop/docs/velstand_policy.md)：热启动、双教师、各阶段实验。
-- [SitStand 训练记录](microduck_rl-develop/docs/sitstand_policy.md)：坐站任务及后期强化。
-- [RollerStandUp 记录](microduck_rl-develop/docs/roller_standup_policy_summary.md)：目标高度、轮式关节索引和恢复任务。
-- [运行时文档目录](microduck-main/docs/README.md)、[策略 manifest](microduck-main/docs/policy-manifest.md)：部署契约。
-- [官方运行时仿真](microduck-main/docs/robot/simulation.md)：daemon + MuJoCo 路径，非共享 RL 训练。
-
-官方 `docs/superpowers/` 是历史设计/实施计划，不能仅凭其条目认定本地已实现。
-官方部署、网络、BLE、UI 等文档不合并进本地 RL 指南；本次只清理 `examples/microduck/` 顶层六份 Markdown 正文。
-
-<a id="reward-index"></a>
-
-## 附录 A：官方奖励源码索引
-
-以下从原 `OFFICIAL_REWARDS_INDEX.md` 归并，保留声明、权重表达式和实现位置。
-这是静态源码索引，包含条件分支、零权重项、测试台及被覆盖定义，不等于当前运行奖励列表。
-实际使用快照的解析配置，再结合本地 `supported/omitted` 和课程判断；本地步态奖励见第 8 节。
-来源行号是整理时的定位提示，源码变化后应用函数名搜索复核。
-
-### microduck_ball_kick_env_cfg
-
-| 奖励项/赋值目标 | 函数或类 | 声明时权重表达式 | 配置位置 | 实现位置 |
-|---|---|---|---|---|
-| `cfg.rewards['ball_forward_velocity']` | `microduck_mdp.ball_forward_velocity` | `12.0` | [声明][reward-source-1] | [mdp.py][reward-source-2] |
-| `cfg.rewards['ball_speed_overshoot']` | `microduck_mdp.ball_speed_overshoot_penalty` | `-4.0` | [声明][reward-source-3] | [mdp.py][reward-source-4] |
-| `cfg.rewards['support_foot_grounded']` | `microduck_mdp.single_foot_grounded_reward` | `2.0` | [声明][reward-source-5] | [mdp.py][reward-source-6] |
-| `cfg.rewards['pose_stand_legs']` | `microduck_mdp.pose_target_match` | `2.0` | [声明][reward-source-7] | [mdp.py][reward-source-8] / [mdp.py][reward-source-9] |
-| `cfg.rewards['pose_stand_neck']` | `microduck_mdp.pose_target_match` | `1.0` | [声明][reward-source-10] | [mdp.py][reward-source-8] / [mdp.py][reward-source-9] |
-| `cfg.rewards['height_stand']` | `microduck_mdp.height_target_gaussian` | `1.0` | [声明][reward-source-11] | [mdp.py][reward-source-12] |
-| `cfg.rewards['self_collisions']` | `mdp.self_collision_cost` | `-1.0` | [声明][reward-source-13] | [rewards.py][reward-source-14] |
-
-### microduck_ground_pick_env_cfg
-
-| 奖励项/赋值目标 | 函数或类 | 声明时权重表达式 | 配置位置 | 实现位置 |
-|---|---|---|---|---|
-| `cfg.rewards['mouth_ground_proximity']` | `microduck_mdp.mouth_ground_proximity_phased` | `3.0` | [声明][reward-source-15] | [mdp.py][reward-source-16] |
-| `cfg.rewards['mouth_perpendicular_to_ground']` | `microduck_mdp.mouth_perpendicular_phased` | `2.0` | [声明][reward-source-17] | [mdp.py][reward-source-18] |
-| `cfg.rewards['ground_pick_return_pose_legs']` | `microduck_mdp.ground_pick_return_pose_phased` | `6.0` | [声明][reward-source-19] | [mdp.py][reward-source-20] |
-| `cfg.rewards['ground_pick_return_pose_neck']` | `microduck_mdp.ground_pick_return_pose_phased` | `6.0` | [声明][reward-source-21] | [mdp.py][reward-source-20] |
-| `cfg.rewards['return_upright']` | `microduck_mdp.ground_pick_return_upright_phased` | `4.0` | [声明][reward-source-22] | [mdp.py][reward-source-23] |
-| `cfg.rewards['neck_vel_descent']` | `microduck_mdp.neck_vel_descent_penalty` | `-0.1` | [声明][reward-source-24] | [mdp.py][reward-source-25] |
-| `cfg.rewards['mouth_payload_force']` | `microduck_mdp.apply_mouth_payload_force` | `0.0` | [声明][reward-source-26] | [mdp.py][reward-source-27] |
-| `cfg.rewards['feet_grounded']` | `microduck_mdp.feet_grounded_reward` | `3.0` | [声明][reward-source-28] | [mdp.py][reward-source-29] |
-| `cfg.rewards['feet_flat']` | `microduck_mdp.feet_flat_penalty` | `-2.0` | [声明][reward-source-30] | [mdp.py][reward-source-31] |
-| `cfg.rewards['action_rate_l2']` | `mdp.action_rate_l2` | `-2.0` | [声明][reward-source-32] | [rewards.py][reward-source-33] |
-| `cfg.rewards['neck_action_rate_l2']` | `microduck_mdp.neck_action_rate_l2` | `-1.0` | [声明][reward-source-34] | [mdp.py][reward-source-35] |
-| `cfg.rewards['joint_torques_l2']` | `microduck_mdp.joint_torques_l2` | `-0.005` | [声明][reward-source-36] | [mdp.py][reward-source-37] |
-| `cfg.rewards['self_collisions']` | `mdp.self_collision_cost` | `-1.0` | [声明][reward-source-38] | [rewards.py][reward-source-14] |
-| `cfg.rewards['head_impact_penalty']` | `microduck_mdp.body_impact_cost` | `-2.0` | [声明][reward-source-39] | [mdp.py][reward-source-40] |
-
-### microduck_roller_crouch_env_cfg
-
-| 奖励项/赋值目标 | 函数或类 | 声明时权重表达式 | 配置位置 | 实现位置 |
-|---|---|---|---|---|
-| `cfg.rewards['crouch_glide_pose']` | `microduck_mdp.crouch_glide_pose_by_phase` | `6.0` | [声明][reward-source-41] | [mdp.py][reward-source-42] |
-| `cfg.rewards['crouch_glide_pose_l1']` | `microduck_mdp.crouch_glide_pose_l1` | `2.0` | [声明][reward-source-43] | [mdp.py][reward-source-44] |
-| `cfg.rewards['forward_speed']` | `microduck_mdp.forward_speed_reward` | `1.0` | [声明][reward-source-45] | [mdp.py][reward-source-46] |
-| `cfg.rewards['crouch_forward_lean']` | `microduck_mdp.crouch_forward_lean` | `1.0` | [声明][reward-source-47] | [mdp.py][reward-source-48] |
-| `cfg.rewards['feet_flat']` | `microduck_mdp.feet_flat_penalty` | `-2.0` | [声明][reward-source-49] | [mdp.py][reward-source-31] |
-| `cfg.rewards['self_collisions']` | `mdp.self_collision_cost` | `-1.0` | [声明][reward-source-50] | [rewards.py][reward-source-14] |
-| `cfg.rewards['neck_action_rate_l2']` | `microduck_mdp.neck_action_rate_l2` | `-0.5` | [声明][reward-source-51] | [mdp.py][reward-source-35] |
-| `cfg.rewards['joint_torques_l2']` | `microduck_mdp.joint_torques_l2` | `-0.001` | [声明][reward-source-52] | [mdp.py][reward-source-37] |
-
-### microduck_roller_slope_env_cfg
-
-| 奖励项/赋值目标 | 函数或类 | 声明时权重表达式 | 配置位置 | 实现位置 |
-|---|---|---|---|---|
-| `cfg.rewards['upright']` | `microduck_mdp.body_upright_gaussian` | `3.0` | [声明][reward-source-53] | [mdp.py][reward-source-54] |
-| `cfg.rewards['alive']` | `microduck_mdp.is_alive` | `1.0` | [声明][reward-source-55] | [mdp.py][reward-source-56] |
-| `cfg.rewards['wheel_glide']` | `microduck_mdp.wheel_glide_reward` | `2.0` | [声明][reward-source-57] | [mdp.py][reward-source-58] |
-| `cfg.rewards['heading_hold']` | `microduck_mdp.heading_hold_reward` | `1.5` | [声明][reward-source-59] | [mdp.py][reward-source-60] |
-| `cfg.rewards['feet_flat']` | `microduck_mdp.feet_flat_penalty` | `-2.0` | [声明][reward-source-61] | [mdp.py][reward-source-31] |
-| `cfg.rewards['neck_action_rate_l2']` | `microduck_mdp.neck_action_rate_l2` | `-0.5` | [声明][reward-source-62] | [mdp.py][reward-source-35] |
-| `cfg.rewards['neck_joint_pos_l2']` | `microduck_mdp.neck_joint_pos_l2` | `-0.75` | [声明][reward-source-63] | [mdp.py][reward-source-64] |
-| `cfg.rewards['joint_torques_l2']` | `microduck_mdp.joint_torques_l2` | `-0.001` | [声明][reward-source-65] | [mdp.py][reward-source-37] |
-
-### microduck_roller_standup_env_cfg
-
-| 奖励项/赋值目标 | 函数或类 | 声明时权重表达式 | 配置位置 | 实现位置 |
-|---|---|---|---|---|
-| `cfg.rewards['pose_stand_legs']` | `microduck_mdp.pose_target_match` | `8.0` | [声明][reward-source-66] | [mdp.py][reward-source-8] / [mdp.py][reward-source-9] |
-| `cfg.rewards['pose_stand_l1']` | `microduck_mdp.pose_l1_penalty` | `5.0` | [声明][reward-source-67] | [mdp.py][reward-source-68] |
-| `cfg.rewards['height_stand']` | `microduck_mdp.height_target_gaussian` | `4.0` | [声明][reward-source-69] | [mdp.py][reward-source-12] |
-| `cfg.rewards['height_stand_sharp']` | `microduck_mdp.height_target_gaussian` | `4.0` | [声明][reward-source-70] | [mdp.py][reward-source-12] |
-| `cfg.rewards['height_stand_l1']` | `microduck_mdp.height_l1_penalty` | `30.0` | [声明][reward-source-71] | [mdp.py][reward-source-72] |
-| `cfg.rewards['com_upward_velocity']` | `microduck_mdp.com_upward_velocity` | `3.0` | [声明][reward-source-73] | [mdp.py][reward-source-74] |
-| `cfg.rewards['gentle_rise']` | `microduck_mdp.trunk_vertical_accel_penalty` | `+0.02` | [声明][reward-source-75] | [mdp.py][reward-source-76] |
-| `cfg.rewards['upright_linear']` | `microduck_mdp.body_upright_linear` | `6.0` | [声明][reward-source-77] | [mdp.py][reward-source-78] |
-| `cfg.rewards['upright_sharp']` | `microduck_mdp.upright_gaussian_at_height` | `6.0` | [声明][reward-source-79] | [mdp.py][reward-source-80] |
-| `cfg.rewards['standing_composite']` | `microduck_mdp.standing_composite_score` | `15.0` | [声明][reward-source-81] | [mdp.py][reward-source-82] |
-| `cfg.rewards['joint_torque_rate_l2']` | `microduck_mdp.joint_torque_rate_l2` | `-0.2` | [声明][reward-source-83] | [mdp.py][reward-source-84] |
-
-### microduck_roulade_env_cfg
-
-| 奖励项/赋值目标 | 函数或类 | 声明时权重表达式 | 配置位置 | 实现位置 |
-|---|---|---|---|---|
-| `cfg.rewards['roulade_progress']` | `microduck_mdp.roulade_progress` | `8.0` | [声明][reward-source-85] | [mdp.py][reward-source-86] |
-| `cfg.rewards['roulade_overspeed']` | `microduck_mdp.roulade_overspeed_penalty` | `-0.1` | [声明][reward-source-87] | [mdp.py][reward-source-88] |
-| `cfg.rewards['roulade_head_pivot']` | `microduck_mdp.roulade_head_pivot` | `0.5` | [声明][reward-source-89] | [mdp.py][reward-source-90] |
-| `cfg.rewards['roulade_landing_composite']` | `microduck_mdp.roulade_landing_composite` | `4.0` | [声明][reward-source-91] | [mdp.py][reward-source-92] |
-| `cfg.rewards['roulade_upright_after_roll']` | `microduck_mdp.roulade_upright_after_roll` | `1.5` | [声明][reward-source-93] | [mdp.py][reward-source-94] |
-| `cfg.rewards['roulade_height_after_roll']` | `microduck_mdp.roulade_height_after_roll` | `1.0` | [声明][reward-source-95] | [mdp.py][reward-source-96] |
-| `cfg.rewards['roulade_landing_sharp']` | `microduck_mdp.roulade_landing_sharp` | `2.0` | [声明][reward-source-97] | [mdp.py][reward-source-98] |
-| `cfg.rewards['roulade_stand_tax']` | `microduck_mdp.roulade_stand_tax` | `5.0` | [声明][reward-source-99] | [mdp.py][reward-source-100] |
-| `cfg.rewards['roulade_rise_velocity']` | `microduck_mdp.roulade_rise_velocity` | `0.75` | [声明][reward-source-101] | [mdp.py][reward-source-102] |
-| `cfg.rewards['roulade_sagittal']` | `microduck_mdp.roulade_sagittal_penalty` | `-0.1` | [声明][reward-source-103] | [mdp.py][reward-source-104] |
-| `cfg.rewards['roulade_lateral_vel']` | `microduck_mdp.roulade_lateral_velocity_penalty` | `-0.5` | [声明][reward-source-105] | [mdp.py][reward-source-106] |
-| `cfg.rewards['roulade_flatness']` | `microduck_mdp.roulade_flatness_penalty` | `-0.5` | [声明][reward-source-107] | [mdp.py][reward-source-108] |
-| `cfg.rewards['action_rate_l2']` | `mdp.action_rate_l2` | `-0.1` | [声明][reward-source-109] | [rewards.py][reward-source-33] |
-| `cfg.rewards['joint_torque_rate_l2']` | `microduck_mdp.joint_torque_rate_l2` | `0.0` | [声明][reward-source-110] | [mdp.py][reward-source-84] |
-| `cfg.rewards['arrival_damping']` | `microduck_mdp.body_ang_vel_at_height` | `0.0` | [声明][reward-source-111] | [mdp.py][reward-source-112] |
-| `cfg.rewards['gentle_landing']` | `microduck_mdp.trunk_vertical_accel_penalty` | `0.002` | [声明][reward-source-113] | [mdp.py][reward-source-76] |
-| `cfg.rewards['self_collisions']` | `mdp.self_collision_cost` | `-0.1` | [声明][reward-source-114] | [rewards.py][reward-source-14] |
-
-### microduck_sitstand_env_cfg
-
-| 奖励项/赋值目标 | 函数或类 | 声明时权重表达式 | 配置位置 | 实现位置 |
-|---|---|---|---|---|
-| `cfg.rewards['posture_pose_legs']` | `microduck_mdp.posture_pose_match` | `4.0` | [声明][reward-source-115] | [mdp.py][reward-source-116] |
-| `cfg.rewards['head_pose_tracking']` | `microduck_mdp.head_pose_tracking` | `0.75` | [声明][reward-source-117] | [mdp.py][reward-source-118] |
-| `cfg.rewards['posture_pose_l1']` | `microduck_mdp.posture_pose_l1` | `1.0` | [声明][reward-source-119] | [mdp.py][reward-source-120] |
-| `cfg.rewards['posture_height']` | `microduck_mdp.posture_height_gaussian` | `1.0` | [声明][reward-source-121] | [mdp.py][reward-source-122] |
-| `cfg.rewards['posture_height_sharp']` | `microduck_mdp.posture_height_gaussian` | `1.0` | [声明][reward-source-123] | [mdp.py][reward-source-122] |
-| `cfg.rewards['posture_height_l1']` | `microduck_mdp.posture_height_l1` | `6.0` | [声明][reward-source-124] | [mdp.py][reward-source-125] |
-| `cfg.rewards['rise_bootstrap']` | `microduck_mdp.posture_rise_bootstrap` | `0.75` | [声明][reward-source-126] | [mdp.py][reward-source-127] |
-| `cfg.rewards['descent_speed']` | `microduck_mdp.trunk_downward_velocity_penalty` | `10.0` | [声明][reward-source-128] | [mdp.py][reward-source-129] |
-| `cfg.rewards['rise_speed']` | `microduck_mdp.trunk_upward_velocity_penalty` | `0.0` | [声明][reward-source-130] | [mdp.py][reward-source-131] |
-| `cfg.rewards['gentle_motion']` | `microduck_mdp.trunk_vertical_accel_penalty` | `0.05` | [声明][reward-source-132] | [mdp.py][reward-source-76] |
-| `cfg.rewards['upright_linear']` | `microduck_mdp.body_upright_linear` | `2.5` | [声明][reward-source-133] | [mdp.py][reward-source-78] |
-| `cfg.rewards['upright_while_tall']` | `microduck_mdp.upright_while_tall` | `1.5` | [声明][reward-source-134] | [mdp.py][reward-source-135] |
-| `cfg.rewards['posture_stillness']` | `microduck_mdp.posture_stillness` | `2.0` | [声明][reward-source-136] | [mdp.py][reward-source-137] |
-| `cfg.rewards['posture_composite']` | `microduck_mdp.posture_composite` | `3.0` | [声明][reward-source-138] | [mdp.py][reward-source-139] |
-| `cfg.rewards['action_rate_l2']` | `mdp.action_rate_l2` | `-0.1` | [声明][reward-source-140] | [rewards.py][reward-source-33] |
-| `cfg.rewards['joint_torque_rate_l2']` | `microduck_mdp.joint_torque_rate_l2` | `0.0` | [声明][reward-source-141] | [mdp.py][reward-source-84] |
-| `cfg.rewards['neck_strain_leaned']` | `microduck_mdp.neck_torque_when_tilted` | `-0.5` | [声明][reward-source-142] | [mdp.py][reward-source-143] |
-| `cfg.rewards['self_collisions']` | `mdp.self_collision_cost` | `-1.0` | [声明][reward-source-144] | [rewards.py][reward-source-14] |
-
-### microduck_spin_env_cfg
-
-| 奖励项/赋值目标 | 函数或类 | 声明时权重表达式 | 配置位置 | 实现位置 |
-|---|---|---|---|---|
-| `cfg.rewards['spin_rate_track']` | `microduck_mdp.spin_rate_track` | `6.0` | [声明][reward-source-145] | [mdp.py][reward-source-146] |
-| `cfg.rewards['spin_rate_l1']` | `microduck_mdp.spin_rate_l1` | `0.5` | [声明][reward-source-147] | [mdp.py][reward-source-148] |
-| `cfg.rewards['spin_stay_in_place']` | `microduck_mdp.spin_stay_in_place` | `-3.0` | [声明][reward-source-149] | [mdp.py][reward-source-150] |
-| `cfg.rewards['spin_wheel_differential']` | `microduck_mdp.spin_wheel_differential` | `1.0` | [声明][reward-source-151] | [mdp.py][reward-source-152] |
-| `cfg.rewards['leg_antisymmetry']` | `microduck_mdp.leg_antisymmetry` | `1.0` | [声明][reward-source-153] | [mdp.py][reward-source-154] |
-| `cfg.rewards['spin_grounded']` | `microduck_mdp.spin_grounded` | `0.5` | [声明][reward-source-155] | [mdp.py][reward-source-156] |
-| `cfg.rewards['feet_flat']` | `microduck_mdp.feet_flat_penalty` | `-2.0` | [声明][reward-source-157] | [mdp.py][reward-source-31] |
-| `cfg.rewards['self_collisions']` | `mdp.self_collision_cost` | `-1.0` | [声明][reward-source-158] | [rewards.py][reward-source-14] |
-| `cfg.rewards['neck_action_rate_l2']` | `microduck_mdp.neck_action_rate_l2` | `-0.5` | [声明][reward-source-159] | [mdp.py][reward-source-35] |
-| `cfg.rewards['neck_joint_pos_l2']` | `microduck_mdp.neck_joint_pos_l2` | `-0.2` | [声明][reward-source-160] | [mdp.py][reward-source-64] |
-| `cfg.rewards['joint_torques_l2']` | `microduck_mdp.joint_torques_l2` | `-0.001` | [声明][reward-source-161] | [mdp.py][reward-source-37] |
-
-### microduck_standup_env_cfg
-
-| 奖励项/赋值目标 | 函数或类 | 声明时权重表达式 | 配置位置 | 实现位置 |
-|---|---|---|---|---|
-| `cfg.rewards['pose_stand_legs']` | `microduck_mdp.pose_target_match` | `2.0` | [声明][reward-source-162] | [mdp.py][reward-source-8] / [mdp.py][reward-source-9] |
-| `cfg.rewards['head_pose_tracking']` | `microduck_mdp.head_pose_tracking` | `0.75` | [声明][reward-source-163] | [mdp.py][reward-source-118] |
-| `cfg.rewards['head_pose_bias']` | `microduck_mdp.head_pose_bias_penalty` | `0.0` | [声明][reward-source-164] | [mdp.py][reward-source-165] |
-| `cfg.rewards['pose_stand_l1']` | `microduck_mdp.pose_l1_penalty` | `1.25` | [声明][reward-source-166] | [mdp.py][reward-source-68] |
-| `cfg.rewards['height_stand']` | `microduck_mdp.height_target_gaussian` | `1.0` | [声明][reward-source-167] | [mdp.py][reward-source-12] |
-| `cfg.rewards['height_stand_sharp']` | `microduck_mdp.height_target_gaussian` | `1.0` | [声明][reward-source-168] | [mdp.py][reward-source-12] |
-| `cfg.rewards['height_stand_l1']` | `microduck_mdp.height_l1_penalty` | `7.5` | [声明][reward-source-169] | [mdp.py][reward-source-72] |
-| `cfg.rewards['com_upward_velocity']` | `microduck_mdp.com_upward_velocity` | `0.75` | [声明][reward-source-170] | [mdp.py][reward-source-74] |
-| `cfg.rewards['gentle_rise']` | `microduck_mdp.trunk_vertical_accel_penalty` | `0.005` | [声明][reward-source-171] | [mdp.py][reward-source-76] |
-| `cfg.rewards['arrival_damping']` | `microduck_mdp.body_ang_vel_at_height` | `0.0` | [声明][reward-source-172] | [mdp.py][reward-source-112] |
-| `cfg.rewards['upright_linear']` | `microduck_mdp.body_upright_linear` | `1.5` | [声明][reward-source-173] | [mdp.py][reward-source-78] |
-| `cfg.rewards['upright_sharp']` | `microduck_mdp.upright_gaussian_at_height` | `1.5` | [声明][reward-source-174] | [mdp.py][reward-source-80] |
-| `cfg.rewards['standing_composite']` | `microduck_mdp.standing_composite_score` | `3.75` | [声明][reward-source-175] | [mdp.py][reward-source-82] |
-| `cfg.rewards['body_pose_tracking']` | `microduck_mdp.body_pose_tracking_locomotion` | `0.0` | [声明][reward-source-176] | [mdp.py][reward-source-177] |
-| `cfg.rewards['action_rate_l2']` | `mdp.action_rate_l2` | `-0.1` | [声明][reward-source-178] | [rewards.py][reward-source-33] |
-| `cfg.rewards['joint_torque_rate_l2']` | `microduck_mdp.joint_torque_rate_l2` | `0.0` | [声明][reward-source-179] | [mdp.py][reward-source-84] |
-| `cfg.rewards['self_collisions']` | `mdp.self_collision_cost` | `-1.0` | [声明][reward-source-180] | [rewards.py][reward-source-14] |
-
-### microduck_velocity_env_cfg
-
-| 奖励项/赋值目标 | 函数或类 | 声明时权重表达式 | 配置位置 | 实现位置 |
-|---|---|---|---|---|
-| `cfg.rewards['self_collisions']` | `mdp.self_collision_cost` | `-1.0` | [声明][reward-source-181] | [rewards.py][reward-source-14] |
-| `cfg.rewards['head_pose_tracking']` | `microduck_mdp.head_pose_tracking` | `2.0` | [声明][reward-source-182] | [mdp.py][reward-source-118] |
-| `cfg.rewards['body_pose_tracking']` | `microduck_mdp.body_pose_tracking_6d` | `0.0` | [声明][reward-source-183] | [mdp.py][reward-source-184] |
-| `cfg.rewards['head_pose_bias']` | `microduck_mdp.head_pose_bias_penalty` | `0.0` | [声明][reward-source-185] | [mdp.py][reward-source-165] |
-
-### microduck_velocity_rollers_env_cfg
-
-| 奖励项/赋值目标 | 函数或类 | 声明时权重表达式 | 配置位置 | 实现位置 |
-|---|---|---|---|---|
-| `cfg.rewards['com_height_target']` | `microduck_mdp.com_height_target` | `2.0` | [声明][reward-source-186] | [mdp.py][reward-source-187] |
-| `cfg.rewards['self_collisions']` | `mdp.self_collision_cost` | `-1.0` | [声明][reward-source-188] | [rewards.py][reward-source-14] |
-| `cfg.rewards['feet_flat']` | `microduck_mdp.feet_flat_penalty` | `-2.0` | [声明][reward-source-189] | [mdp.py][reward-source-31] |
-| `cfg.rewards['neck_action_rate_l2']` | `microduck_mdp.neck_action_rate_l2` | `-0.5` | [声明][reward-source-190] | [mdp.py][reward-source-35] |
-| `cfg.rewards['neck_joint_pos_l2']` | `microduck_mdp.neck_joint_pos_l2` | `-0.5` | [声明][reward-source-191] | [mdp.py][reward-source-64] |
-| `cfg.rewards['joint_torques_l2']` | `microduck_mdp.joint_torques_l2` | `-0.001` | [声明][reward-source-192] | [mdp.py][reward-source-37] |
-| `cfg.rewards['action_over_limit']` | `microduck_mdp.action_over_limit_penalty` | `-0.5` | [声明][reward-source-193] | [mdp.py][reward-source-194] |
-| `cfg.rewards['hip_roll_neutral']` | `microduck_mdp.joint_deviation_l1` | `-2.0` | [声明][reward-source-195] | [mdp.py][reward-source-196] |
-| `cfg.rewards['wheel_speed']` | `microduck_mdp.wheel_speed_reward` | `10.0` | [声明][reward-source-197] | [mdp.py][reward-source-198] |
-| `cfg.rewards['braking']` | `microduck_mdp.braking_reward` | `1.0` | [声明][reward-source-199] | [mdp.py][reward-source-200] |
-| `cfg.rewards['skating_air_time']` | `microduck_mdp.skating_air_time_reward` | `1.5` | [声明][reward-source-201] | [mdp.py][reward-source-202] |
-| `cfg.rewards['glide']` | `microduck_mdp.glide_reward` | `4.0` | [声明][reward-source-203] | [mdp.py][reward-source-204] |
-| `cfg.rewards['single_support']` | `microduck_mdp.single_support_reward` | `3.0` | [声明][reward-source-205] | [mdp.py][reward-source-206] |
-| `cfg.rewards['gait_symmetry']` | `microduck_mdp.gait_symmetry_penalty` | `-1.0` | [声明][reward-source-207] | [mdp.py][reward-source-208] |
-| `cfg.rewards['forward_lean']` | `microduck_mdp.forward_lean_reward` | `1.5` | [声明][reward-source-209] | [mdp.py][reward-source-210] |
-| `cfg.rewards['heading_hold']` | `microduck_mdp.heading_hold_reward` | `1.0` | [声明][reward-source-211] | [mdp.py][reward-source-60] |
-
-### microduck_velocity_swizzle_env_cfg
-
-| 奖励项/赋值目标 | 函数或类 | 声明时权重表达式 | 配置位置 | 实现位置 |
-|---|---|---|---|---|
-| `cfg.rewards['leg_symmetry']` | `microduck_mdp.leg_symmetry_reward` | `2.0` | [声明][reward-source-212] | [mdp.py][reward-source-213] |
-| `cfg.rewards['grounded']` | `microduck_mdp.grounded_reward` | `1.0` | [声明][reward-source-214] | [mdp.py][reward-source-215] |
-| `cfg.rewards['heading_tracking']` | `microduck_mdp.heading_tracking_reward` | `0.0` | [声明][reward-source-216] | [mdp.py][reward-source-217] |
-| `cfg.rewards['head_pose_tracking']` | `microduck_mdp.head_pose_tracking` | `0.0` | [声明][reward-source-218] | [mdp.py][reward-source-118] |
-
-### microduck_velstand_env_cfg
-
-| 奖励项/赋值目标 | 函数或类 | 声明时权重表达式 | 配置位置 | 实现位置 |
-|---|---|---|---|---|
-| `cfg.rewards['body_pose_tracking']` | `microduck_mdp.body_pose_tracking_locomotion` | `BODY_TRACK_WEIGHT` | [声明][reward-source-219] | [mdp.py][reward-source-177] |
-| `cfg.rewards['pose']` | `microduck_mdp.variable_posture_body_relaxed` | `pose.weight` | [声明][reward-source-220] | [mdp.py][reward-source-221] |
-| `cfg.rewards['upright']` | `microduck_mdp.upright_body_cmd_relative` | `up.weight` | [声明][reward-source-222] | [mdp.py][reward-source-223] |
-| `cfg.rewards['track_yaw_fine']` | `microduck_mdp.track_yaw_rate_fine` | `TRACK_YAW_FINE_WEIGHT` | [声明][reward-source-224] | [mdp.py][reward-source-225] |
-| `cfg.rewards['track_yaw_fine']` | `microduck_mdp.track_yaw_rate_fine` | `TRACK_YAW_FINE_WEIGHT` | [声明][reward-source-226] | [mdp.py][reward-source-225] |
-| `cfg.rewards['upright_progress']` | `microduck_mdp.upright_progress` | `5.0` | [声明][reward-source-227] | [mdp.py][reward-source-228] |
-| `cfg.rewards['height_progress']` | `microduck_mdp.height_progress` | `30.0` | [声明][reward-source-229] | [mdp.py][reward-source-230] |
-| `cfg.rewards['com_upward_velocity']` | `microduck_mdp.com_upward_velocity` | `0.0` | [声明][reward-source-231] | [mdp.py][reward-source-74] |
-| `cfg.rewards['joint_torque_rate_l2']` | `microduck_mdp.joint_torque_rate_l2_fallen_scaled` | `-0.002` | [声明][reward-source-232] | [mdp.py][reward-source-233] |
-| `cfg.rewards['action_rate_l2']` | `microduck_mdp.action_rate_l2_fallen_scaled` | `ar.weight` | [声明][reward-source-234] | [mdp.py][reward-source-235] |
-| `cfg.rewards['servo_impact']` | `microduck_mdp.body_impact_cost` | `SERVO_IMPACT_WEIGHT * PROTECT_STAGE0_FRAC` | [声明][reward-source-236] | [mdp.py][reward-source-40] |
-| `cfg.rewards['head_impact']` | `microduck_mdp.body_impact_cost` | `HEAD_IMPACT_WEIGHT * PROTECT_STAGE0_FRAC` | [声明][reward-source-237] | [mdp.py][reward-source-40] |
-| `cfg.rewards['trunk_impact']` | `microduck_mdp.body_impact_cost` | `TRUNK_IMPACT_WEIGHT * PROTECT_STAGE0_FRAC` | [声明][reward-source-238] | [mdp.py][reward-source-40] |
-| `cfg.rewards['servo_acc_spike']` | `microduck_mdp.servo_acc_spike_penalty` | `SERVO_ACC_SPIKE_WEIGHT * PROTECT_STAGE0_FRAC` | [声明][reward-source-239] | [mdp.py][reward-source-240] |
-| `cfg.rewards['servo_stall']` | `microduck_mdp.servo_stall_penalty` | `SERVO_STALL_WEIGHT * PROTECT_STAGE0_FRAC` | [声明][reward-source-241] | [mdp.py][reward-source-242] |
-| `cfg.rewards['gentle_rise']` | `microduck_mdp.trunk_vertical_accel_penalty` | `GENTLE_RISE_WEIGHT * PROTECT_STAGE0_FRAC` | [声明][reward-source-243] | [mdp.py][reward-source-76] |
-| `cfg.rewards['air_time']` | `microduck_mdp.feet_air_time_upright` | `at.weight` | [声明][reward-source-244] | [mdp.py][reward-source-245] |
-| `cfg.rewards['fallen_tax']` | `microduck_mdp.fallen_state_penalty` | `0.0` | [声明][reward-source-246] | [mdp.py][reward-source-247] |
-| `cfg.rewards['recovery_success']` | `microduck_mdp.recovery_success` | `0.0` | [声明][reward-source-248] | [mdp.py][reward-source-249] |
-
-### testbench_env_cfg
-
-| 奖励项/赋值目标 | 函数或类 | 声明时权重表达式 | 配置位置 | 实现位置 |
-|---|---|---|---|---|
-| `track_target` | `target_angle_tracking` | `3.0` | [声明][reward-source-250] | [testbench_env_cfg.py][reward-source-251] |
-| `dof_pos_limits` | `base_mdp.joint_pos_limits` | `-1.0` | [声明][reward-source-252] | [rewards.py][reward-source-253] |
-| `action_rate_l2` | `base_mdp.action_rate_l2` | `-0.6` | [声明][reward-source-254] | [rewards.py][reward-source-33] |
-| `joint_torques_l2` | `base_mdp.joint_torques_l2` | `-0.001` | [声明][reward-source-255] | [rewards.py][reward-source-256] |
-| `joint_vel_l2` | `base_mdp.joint_vel_l2` | `-0.001` | [声明][reward-source-257] | [rewards.py][reward-source-258] |
-
-### velocity_env_cfg
-
-| 奖励项/赋值目标 | 函数或类 | 声明时权重表达式 | 配置位置 | 实现位置 |
-|---|---|---|---|---|
-| `track_linear_velocity` | `mdp.track_linear_velocity` | `2.0` | [声明][reward-source-259] | [rewards.py][reward-source-260] |
-| `track_angular_velocity` | `mdp.track_angular_velocity` | `2.0` | [声明][reward-source-261] | [rewards.py][reward-source-262] |
-| `upright` | `mdp.upright` | `1.0` | [声明][reward-source-263] | [rewards.py][reward-source-264] |
-| `pose` | `mdp.variable_posture` | `1.0` | [声明][reward-source-265] | [rewards.py][reward-source-266] |
-| `body_ang_vel` | `mdp.body_angular_velocity_penalty` | `0.0` | [声明][reward-source-267] | [rewards.py][reward-source-268] |
-| `angular_momentum` | `mdp.angular_momentum_penalty` | `0.0` | [声明][reward-source-269] | [rewards.py][reward-source-270] |
-| `dof_pos_limits` | `mdp.joint_pos_limits` | `-1.0` | [声明][reward-source-271] | [rewards.py][reward-source-253] |
-| `action_rate_l2` | `mdp.action_rate_l2` | `-0.1` | [声明][reward-source-272] | [rewards.py][reward-source-33] |
-| `air_time` | `mdp.feet_air_time` | `0.0` | [声明][reward-source-273] | [rewards.py][reward-source-274] |
-| `foot_clearance` | `mdp.feet_clearance` | `-2.0` | [声明][reward-source-275] | [rewards.py][reward-source-276] |
-| `foot_swing_height` | `mdp.feet_swing_height` | `-0.25` | [声明][reward-source-277] | [rewards.py][reward-source-278] |
-| `foot_slip` | `mdp.feet_slip` | `-0.1` | [声明][reward-source-279] | [rewards.py][reward-source-280] |
-| `soft_landing` | `mdp.soft_landing` | `-1e-05` | [声明][reward-source-281] | [rewards.py][reward-source-282] |
-
-说明：`mdp.py` 中 `pose_target_match` 有两个同名定义，Python 实际使用后面的第 2538 行定义，前面的定义被覆盖。
-
-### 去重后的奖励实现
-
-共找到 172 处 RewardTermCfg 显式函数注册，关联 110 个去重实现位置（包含一个被后续同名定义覆盖的位置）。
-
-- [joint_torques_l2][reward-source-256] — `examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/envs/mdp/rewards.py`
-- [joint_vel_l2][reward-source-258] — `examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/envs/mdp/rewards.py`
-- [action_rate_l2][reward-source-33] — `examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/envs/mdp/rewards.py`
-- [joint_pos_limits][reward-source-253] — `examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/envs/mdp/rewards.py`
-- [track_linear_velocity][reward-source-260] — `examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py`
-- [track_angular_velocity][reward-source-262] — `examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py`
-- [upright][reward-source-264] — `examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py`
-- [self_collision_cost][reward-source-14] — `examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py`
-- [body_angular_velocity_penalty][reward-source-268] — `examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py`
-- [angular_momentum_penalty][reward-source-270] — `examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py`
-- [feet_air_time][reward-source-274] — `examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py`
-- [feet_clearance][reward-source-276] — `examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py`
-- [feet_swing_height][reward-source-278] — `examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py`
-- [feet_slip][reward-source-280] — `examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py`
-- [soft_landing][reward-source-282] — `examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py`
-- [variable_posture][reward-source-266] — `examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py`
-- [neck_action_rate_l2][reward-source-35] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [feet_air_time_upright][reward-source-245] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [upright_progress][reward-source-228] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [height_progress][reward-source-230] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [fallen_state_penalty][reward-source-247] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [recovery_success][reward-source-249] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [servo_stall_penalty][reward-source-242] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [servo_acc_spike_penalty][reward-source-240] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [action_rate_l2_fallen_scaled][reward-source-235] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [joint_torque_rate_l2_fallen_scaled][reward-source-233] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [body_upright_linear][reward-source-78] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [body_upright_gaussian][reward-source-54] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [upright_gaussian_at_height][reward-source-80] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [body_ang_vel_at_height][reward-source-112] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [standing_composite_score][reward-source-82] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [com_upward_velocity][reward-source-74] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [wheel_glide_reward][reward-source-58] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [is_alive][reward-source-56] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [com_height_target][reward-source-187] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [forward_speed_reward][reward-source-46] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [crouch_glide_pose_by_phase][reward-source-42] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [crouch_glide_pose_l1][reward-source-44] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [crouch_forward_lean][reward-source-48] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [feet_flat_penalty][reward-source-31] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [neck_joint_pos_l2][reward-source-64] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [joint_torques_l2][reward-source-37] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [joint_torque_rate_l2][reward-source-84] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [feet_grounded_reward][reward-source-29] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [body_impact_cost][reward-source-40] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [wheel_speed_reward][reward-source-198] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [braking_reward][reward-source-200] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [joint_deviation_l1][reward-source-196] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [pose_target_match][reward-source-8] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [pose_target_match][reward-source-9] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [pose_l1_penalty][reward-source-68] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [height_target_gaussian][reward-source-12] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [height_l1_penalty][reward-source-72] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [trunk_vertical_accel_penalty][reward-source-76] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [trunk_downward_velocity_penalty][reward-source-129] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [upright_while_tall][reward-source-135] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [mouth_ground_proximity_phased][reward-source-16] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [mouth_perpendicular_phased][reward-source-18] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [ground_pick_return_pose_phased][reward-source-20] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [ground_pick_return_upright_phased][reward-source-23] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [neck_vel_descent_penalty][reward-source-25] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [apply_mouth_payload_force][reward-source-27] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [heading_tracking_reward][reward-source-217] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [skating_air_time_reward][reward-source-202] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [single_support_reward][reward-source-206] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [glide_reward][reward-source-204] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [leg_symmetry_reward][reward-source-213] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [grounded_reward][reward-source-215] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [gait_symmetry_penalty][reward-source-208] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [heading_hold_reward][reward-source-60] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [action_over_limit_penalty][reward-source-194] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [forward_lean_reward][reward-source-210] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [variable_posture_body_relaxed][reward-source-221] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [track_yaw_rate_fine][reward-source-225] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [upright_body_cmd_relative][reward-source-223] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [head_pose_tracking][reward-source-118] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [head_pose_bias_penalty][reward-source-165] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [body_pose_tracking_6d][reward-source-184] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [body_pose_tracking_locomotion][reward-source-177] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [ball_forward_velocity][reward-source-2] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [ball_speed_overshoot_penalty][reward-source-4] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [single_foot_grounded_reward][reward-source-6] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [spin_rate_track][reward-source-146] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [spin_rate_l1][reward-source-148] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [spin_stay_in_place][reward-source-150] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [spin_wheel_differential][reward-source-152] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [spin_grounded][reward-source-156] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [leg_antisymmetry][reward-source-154] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [posture_pose_match][reward-source-116] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [posture_pose_l1][reward-source-120] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [posture_height_gaussian][reward-source-122] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [posture_height_l1][reward-source-125] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [posture_composite][reward-source-139] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [posture_stillness][reward-source-137] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [posture_rise_bootstrap][reward-source-127] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [trunk_upward_velocity_penalty][reward-source-131] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [neck_torque_when_tilted][reward-source-143] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [roulade_progress][reward-source-86] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [roulade_head_pivot][reward-source-90] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [roulade_landing_composite][reward-source-92] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [roulade_upright_after_roll][reward-source-94] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [roulade_height_after_roll][reward-source-96] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [roulade_landing_sharp][reward-source-98] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [roulade_stand_tax][reward-source-100] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [roulade_rise_velocity][reward-source-102] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [roulade_overspeed_penalty][reward-source-88] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [roulade_flatness_penalty][reward-source-108] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [roulade_sagittal_penalty][reward-source-104] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-- [roulade_lateral_velocity_penalty][reward-source-106] — `examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py`
-
-- [target_angle_tracking][reward-source-251] — 舵机测试台本地奖励。
-
-[reward-source-1]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ball_kick_env_cfg.py:238
-[reward-source-2]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:6153
-[reward-source-3]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ball_kick_env_cfg.py:243
-[reward-source-4]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:6179
-[reward-source-5]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ball_kick_env_cfg.py:253
-[reward-source-6]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:6201
-[reward-source-7]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ball_kick_env_cfg.py:262
-[reward-source-8]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:2201
-[reward-source-9]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:2538
-[reward-source-10]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ball_kick_env_cfg.py:274
-[reward-source-11]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ball_kick_env_cfg.py:290
-[reward-source-12]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:2582
-[reward-source-13]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ball_kick_env_cfg.py:306
-[reward-source-14]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py:162
-[reward-source-15]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ground_pick_env_cfg.py:187
-[reward-source-16]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:3129
-[reward-source-17]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ground_pick_env_cfg.py:205
-[reward-source-18]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:3147
-[reward-source-19]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ground_pick_env_cfg.py:222
-[reward-source-20]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:3165
-[reward-source-21]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ground_pick_env_cfg.py:238
-[reward-source-22]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ground_pick_env_cfg.py:255
-[reward-source-23]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:3186
-[reward-source-24]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ground_pick_env_cfg.py:270
-[reward-source-25]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:3203
-[reward-source-26]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ground_pick_env_cfg.py:284
-[reward-source-27]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:3244
-[reward-source-28]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ground_pick_env_cfg.py:312
-[reward-source-29]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:1767
-[reward-source-30]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ground_pick_env_cfg.py:324
-[reward-source-31]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:1605
-[reward-source-32]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ground_pick_env_cfg.py:339
-[reward-source-33]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/envs/mdp/rewards.py:58
-[reward-source-34]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ground_pick_env_cfg.py:344
-[reward-source-35]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:437
-[reward-source-36]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ground_pick_env_cfg.py:349
-[reward-source-37]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:1721
-[reward-source-38]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ground_pick_env_cfg.py:354
-[reward-source-39]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_ground_pick_env_cfg.py:364
-[reward-source-40]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:1786
-[reward-source-41]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_crouch_env_cfg.py:175
-[reward-source-42]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:1478
-[reward-source-43]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_crouch_env_cfg.py:182
-[reward-source-44]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:1502
-[reward-source-45]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_crouch_env_cfg.py:188
-[reward-source-46]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:1400
-[reward-source-47]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_crouch_env_cfg.py:195
-[reward-source-48]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:1524
-[reward-source-49]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_crouch_env_cfg.py:208
-[reward-source-50]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_crouch_env_cfg.py:216
-[reward-source-51]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_crouch_env_cfg.py:221
-[reward-source-52]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_crouch_env_cfg.py:224
-[reward-source-53]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_slope_env_cfg.py:132
-[reward-source-54]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:852
-[reward-source-55]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_slope_env_cfg.py:137
-[reward-source-56]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:1261
-[reward-source-57]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_slope_env_cfg.py:143
-[reward-source-58]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:1235
-[reward-source-59]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_slope_env_cfg.py:149
-[reward-source-60]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:5117
-[reward-source-61]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_slope_env_cfg.py:152
-[reward-source-62]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_slope_env_cfg.py:160
-[reward-source-63]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_slope_env_cfg.py:167
-[reward-source-64]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:1697
-[reward-source-65]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_slope_env_cfg.py:170
-[reward-source-66]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_standup_env_cfg.py:178
-[reward-source-67]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_standup_env_cfg.py:188
-[reward-source-68]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:2563
-[reward-source-69]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_standup_env_cfg.py:201
-[reward-source-70]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_standup_env_cfg.py:210
-[reward-source-71]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_standup_env_cfg.py:219
-[reward-source-72]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:2596
-[reward-source-73]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_standup_env_cfg.py:232
-[reward-source-74]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:1042
-[reward-source-75]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_standup_env_cfg.py:258
-[reward-source-76]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:2609
-[reward-source-77]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_standup_env_cfg.py:268
-[reward-source-78]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:825
-[reward-source-79]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_standup_env_cfg.py:273
-[reward-source-80]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:876
-[reward-source-81]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_standup_env_cfg.py:289
-[reward-source-82]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:952
-[reward-source-83]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roller_standup_env_cfg.py:320
-[reward-source-84]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:1743
-[reward-source-85]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roulade_env_cfg.py:232
-[reward-source-86]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:7436
-[reward-source-87]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roulade_env_cfg.py:246
-[reward-source-88]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:7654
-[reward-source-89]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roulade_env_cfg.py:254
-[reward-source-90]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:7465
-[reward-source-91]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roulade_env_cfg.py:267
-[reward-source-92]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:7499
-[reward-source-93]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roulade_env_cfg.py:284
-[reward-source-94]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:7533
-[reward-source-95]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roulade_env_cfg.py:289
-[reward-source-96]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:7554
-[reward-source-97]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roulade_env_cfg.py:305
-[reward-source-98]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:7572
-[reward-source-99]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roulade_env_cfg.py:323
-[reward-source-100]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:7602
-[reward-source-101]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roulade_env_cfg.py:336
-[reward-source-102]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:7629
-[reward-source-103]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roulade_env_cfg.py:353
-[reward-source-104]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:7689
-[reward-source-105]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roulade_env_cfg.py:357
-[reward-source-106]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:7700
-[reward-source-107]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roulade_env_cfg.py:361
-[reward-source-108]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:7673
-[reward-source-109]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roulade_env_cfg.py:371
-[reward-source-110]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roulade_env_cfg.py:372
-[reward-source-111]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roulade_env_cfg.py:383
-[reward-source-112]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:905
-[reward-source-113]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roulade_env_cfg.py:402
-[reward-source-114]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_roulade_env_cfg.py:410
-[reward-source-115]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:269
-[reward-source-116]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:6776
-[reward-source-117]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:283
-[reward-source-118]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:5513
-[reward-source-119]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:290
-[reward-source-120]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:6792
-[reward-source-121]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:303
-[reward-source-122]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:6807
-[reward-source-123]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:313
-[reward-source-124]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:326
-[reward-source-125]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:6821
-[reward-source-126]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:340
-[reward-source-127]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:6943
-[reward-source-128]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:370
-[reward-source-129]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:2637
-[reward-source-130]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:378
-[reward-source-131]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:6970
-[reward-source-132]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:386
-[reward-source-133]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:397
-[reward-source-134]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:402
-[reward-source-135]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:2691
-[reward-source-136]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:416
-[reward-source-137]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:6899
-[reward-source-138]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:440
-[reward-source-139]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:6839
-[reward-source-140]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:466
-[reward-source-141]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:467
-[reward-source-142]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:481
-[reward-source-143]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:7081
-[reward-source-144]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_sitstand_env_cfg.py:492
-[reward-source-145]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_spin_env_cfg.py:138
-[reward-source-146]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:6338
-[reward-source-147]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_spin_env_cfg.py:144
-[reward-source-148]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:6360
-[reward-source-149]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_spin_env_cfg.py:157
-[reward-source-150]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:6381
-[reward-source-151]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_spin_env_cfg.py:167
-[reward-source-152]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:6436
-[reward-source-153]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_spin_env_cfg.py:177
-[reward-source-154]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:6491
-[reward-source-155]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_spin_env_cfg.py:187
-[reward-source-156]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:6466
-[reward-source-157]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_spin_env_cfg.py:197
-[reward-source-158]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_spin_env_cfg.py:205
-[reward-source-159]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_spin_env_cfg.py:210
-[reward-source-160]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_spin_env_cfg.py:213
-[reward-source-161]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_spin_env_cfg.py:218
-[reward-source-162]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_standup_env_cfg.py:235
-[reward-source-163]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_standup_env_cfg.py:250
-[reward-source-164]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_standup_env_cfg.py:266
-[reward-source-165]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:5614
-[reward-source-166]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_standup_env_cfg.py:284
-[reward-source-167]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_standup_env_cfg.py:302
-[reward-source-168]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_standup_env_cfg.py:311
-[reward-source-169]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_standup_env_cfg.py:324
-[reward-source-170]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_standup_env_cfg.py:351
-[reward-source-171]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_standup_env_cfg.py:373
-[reward-source-172]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_standup_env_cfg.py:393
-[reward-source-173]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_standup_env_cfg.py:414
-[reward-source-174]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_standup_env_cfg.py:425
-[reward-source-175]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_standup_env_cfg.py:441
-[reward-source-176]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_standup_env_cfg.py:466
-[reward-source-177]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:5790
-[reward-source-178]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_standup_env_cfg.py:504
-[reward-source-179]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_standup_env_cfg.py:505
-[reward-source-180]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_standup_env_cfg.py:514
-[reward-source-181]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_env_cfg.py:323
-[reward-source-182]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_env_cfg.py:710
-[reward-source-183]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_env_cfg.py:717
-[reward-source-184]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:5705
-[reward-source-185]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_env_cfg.py:741
-[reward-source-186]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_rollers_env_cfg.py:189
-[reward-source-187]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:1274
-[reward-source-188]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_rollers_env_cfg.py:194
-[reward-source-189]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_rollers_env_cfg.py:203
-[reward-source-190]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_rollers_env_cfg.py:211
-[reward-source-191]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_rollers_env_cfg.py:214
-[reward-source-192]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_rollers_env_cfg.py:217
-[reward-source-193]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_rollers_env_cfg.py:226
-[reward-source-194]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:5152
-[reward-source-195]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_rollers_env_cfg.py:239
-[reward-source-196]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:2113
-[reward-source-197]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_rollers_env_cfg.py:253
-[reward-source-198]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:1816
-[reward-source-199]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_rollers_env_cfg.py:259
-[reward-source-200]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:1882
-[reward-source-201]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_rollers_env_cfg.py:277
-[reward-source-202]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:4896
-[reward-source-203]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_rollers_env_cfg.py:292
-[reward-source-204]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:4987
-[reward-source-205]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_rollers_env_cfg.py:310
-[reward-source-206]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:4944
-[reward-source-207]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_rollers_env_cfg.py:323
-[reward-source-208]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:5086
-[reward-source-209]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_rollers_env_cfg.py:334
-[reward-source-210]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:5187
-[reward-source-211]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_rollers_env_cfg.py:344
-[reward-source-212]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_swizzle_env_cfg.py:44
-[reward-source-213]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:5035
-[reward-source-214]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_swizzle_env_cfg.py:50
-[reward-source-215]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:5065
-[reward-source-216]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_swizzle_env_cfg.py:79
-[reward-source-217]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:4877
-[reward-source-218]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velocity_swizzle_env_cfg.py:134
-[reward-source-219]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:571
-[reward-source-220]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:584
-[reward-source-221]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:5417
-[reward-source-222]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:590
-[reward-source-223]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:5477
-[reward-source-224]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:617
-[reward-source-225]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:5455
-[reward-source-226]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:627
-[reward-source-227]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:689
-[reward-source-228]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:591
-[reward-source-229]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:702
-[reward-source-230]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:620
-[reward-source-231]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:710
-[reward-source-232]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:727
-[reward-source-233]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:814
-[reward-source-234]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:733
-[reward-source-235]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:793
-[reward-source-236]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:744
-[reward-source-237]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:749
-[reward-source-238]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:754
-[reward-source-239]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:759
-[reward-source-240]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:760
-[reward-source-241]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:764
-[reward-source-242]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:738
-[reward-source-243]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:770
-[reward-source-244]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:780
-[reward-source-245]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:572
-[reward-source-246]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:788
-[reward-source-247]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:649
-[reward-source-248]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/microduck_velstand_env_cfg.py:808
-[reward-source-249]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/mdp.py:691
-[reward-source-250]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/testbench_env_cfg.py:206
-[reward-source-251]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/testbench_env_cfg.py:99
-[reward-source-252]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/testbench_env_cfg.py:215
-[reward-source-253]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/envs/mdp/rewards.py:81
-[reward-source-254]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/testbench_env_cfg.py:219
-[reward-source-255]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/testbench_env_cfg.py:223
-[reward-source-256]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/envs/mdp/rewards.py:32
-[reward-source-257]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/src/mjlab_microduck/tasks/testbench_env_cfg.py:227
-[reward-source-258]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/envs/mdp/rewards.py:42
-[reward-source-259]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/velocity_env_cfg.py:276
-[reward-source-260]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py:27
-[reward-source-261]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/velocity_env_cfg.py:281
-[reward-source-262]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py:47
-[reward-source-263]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/velocity_env_cfg.py:286
-[reward-source-264]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py:67
-[reward-source-265]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/velocity_env_cfg.py:294
-[reward-source-266]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py:385
-[reward-source-267]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/velocity_env_cfg.py:307
-[reward-source-268]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py:184
-[reward-source-269]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/velocity_env_cfg.py:312
-[reward-source-270]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py:196
-[reward-source-271]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/velocity_env_cfg.py:317
-[reward-source-272]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/velocity_env_cfg.py:318
-[reward-source-273]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/velocity_env_cfg.py:319
-[reward-source-274]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py:209
-[reward-source-275]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/velocity_env_cfg.py:330
-[reward-source-276]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py:241
-[reward-source-277]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/velocity_env_cfg.py:341
-[reward-source-278]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py:271
-[reward-source-279]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/velocity_env_cfg.py:352
-[reward-source-280]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py:326
-[reward-source-281]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/velocity_env_cfg.py:362
-[reward-source-282]: /home/ubuntu/work/style3d-sim/examples/microduck/microduck_rl-develop/.venv/lib/python3.12/site-packages/mjlab/tasks/velocity/mdp/rewards.py:356
+关键测试：`test_checkpoint_transfer`、`test_shared_physics`、`test_fixed_pad_groups`、`test_inset_pad`、
+`test_mixed_terrain`、`test_soft_pad_guard`、`test_locomotion_rewards`、`test_training_diagnostic`、`test_standup`。
+回放边界改动历史定向 22 项通过；StandUp 验收范围见上文，旧完整测试计数不作为当前全套验证结果。
+报告须区分静态/CPU 测试、真实 SynReal 物理短测、PPO 链路与长期行为收敛。
+
+历史网络严格复核（2026-10-30）：开启两项 GPU 测试开关后，全目录 **247 项通过，无失败或跳过**。
+新旧网络各完成真实 SynReal 4 环境混合场景新训 5 轮、续训 2 轮、同类型初始化 1 轮，
+以及纯平地新训 2 轮、续训 1 轮；另验证旧 `model_13500.pt` 初始化与回放。
+16 次训练/回放入口检查累计 2208 条训练转移，1311 个 TensorBoard 标量均有限；
+网络、梯度、Adam 状态、归一化、课程计数、22 个实际计算的奖励项及奖励加权汇总均通过检查。
+新旧独立软垫回放各 40 帧并手动 reset，历史按首帧重建，权重/归一化保持冻结。
+CPU 同状态同动作对照在三个课程阶段、自动 reset 和推扰下，当前观测、逐项奖励、指令及终止结果完全相同。
+
+复核修复两处运行问题：标准网络纯平地续训首帧漏归一化；软垫自检在 `base_z=0` 为整数时浮点比较报错。
+原 9 项几何测试失败来自依赖可编辑的全局实验几何；埋垫测试现显式构造 1.2 m 齐平垫，
+场景材料测试分别覆盖埋垫/凸起垫。实际环境尺寸、材料、奖励、PD、课程和采样均未调整。
+本次真实混合短测使用当前 6 m、24×24×3、`base_z=0` 凸起垫，不是第 2 节历史运行的埋垫。
+证据与复现脚本：`.validation/microduck_history_audit_20261030/REPORT.md`。
+以上证明训练/恢复/回放链路可运行，不代表短训网络已经收敛或掌握软垫运动。
+
+## 9. 来源与文档维护
+
+- [官方训练项目](microduck_rl-develop/README.md)、[官方目录规则](microduck_rl-develop/AGENTS.md)。
+- [VelStand 流程](microduck_rl-develop/docs/velstand_policy.md)、
+  [双教师实现参考](microduck_rl-develop/src/mjlab_microduck/tasks/distill.py)。
+- [机器人运行时](microduck-main/README.md)、[部署契约](microduck-main/docs/policy-manifest.md)。
+- 具体奖励查 `official_snapshot.json`、本地实现及
+  `microduck_rl-develop/src/mjlab_microduck/tasks/`，不再复制数百条行号索引。
+
+官方副本不代表最新上游，勿擅自更新。优先修改本地适配层，不为让来源测试通过而同步改写官方源。
+`export_recipe.py` 会修改生成源码/快照和指纹；保留已有 `local:true` 奖励/课程/commands，
+不保证保留所有其他手工修改，纯排查/文档整理不要顺手导出。
+
+后续直接更新对应章节，不再追加互相覆盖的“最新摘要”。进程状态注明时间，实验结论保留配置、证据路径和限制。
+此前文档精简仅更新交接正文与维护入口；历史网络改动及验证范围见第 3、8 节。

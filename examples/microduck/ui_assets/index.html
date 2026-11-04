@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+ <head>
+  <meta charset="utf-8"/>
+  <meta content="width=device-width, initial-scale=1" name="viewport"/>
+  <meta content="__WORKBENCH_TOKEN__" name="workbench-token"/>
+  <title>
+   MicroDuck · 训练工作台
+  </title>
+  <link href="/style.css" rel="stylesheet"/>
+  <script defer="" src="/app.js">
+  </script>
+ </head>
+ <body>
+  <aside class="sidebar">
+   <a aria-label="MicroDuck 首页" class="brand" href="/">
+    <span class="logo">
+     μ
+    </span>
+    <span>
+     MicroDuck
+     <small>
+      SIMULATION WORKBENCH
+     </small>
+    </span>
+   </a>
+   <div class="nav-label">
+    工作空间
+   </div>
+   <nav aria-label="主导航">
+    <button class="nav active" data-page="training">
+     ◉
+     <span>
+      训练工作台
+     </span>
+     <small>
+      01
+     </small>
+    </button>
+    <button class="nav" data-page="evaluation">
+     ▷
+     <span>
+      模型与评估
+     </span>
+     <small>
+      02
+     </small>
+    </button>
+   </nav>
+   <div class="sidebar-note">
+    <span class="online-dot">
+    </span>
+    本机运行
+    <br/>
+    <small>
+     SynReal / MuJoCo
+     <br/>
+     RSL-RL · PPO
+    </small>
+   </div>
+   <div class="sidebar-bottom">
+    让策略，从模拟走向现实。
+    <br/>
+    <small>
+     MICRODUCK / STYLE3D SIM
+    </small>
+   </div>
+  </aside>
+  <main>
+   <header>
+    <span>
+     工作空间
+     <span class="slash">
+      /
+     </span>
+     <span id="breadcrumb">
+      训练工作台
+     </span>
+    </span>
+    <span class="badge" id="connection">
+     正在连接
+    </span>
+   </header>
+   <div hidden="" id="notice" role="alert">
+   </div>
+   <section class="page" id="training">
+    <div class="page-heading">
+     <div>
+      <div class="eyebrow">
+       TRAIN / OBSERVE / ITERATE
+      </div>
+      <h1>
+       训练工作台
+       <span class="title-dot">
+        .
+       </span>
+      </h1>
+      <p>
+       配置实验，启动训练，在需要的时候观察策略表现。
+      </p>
+     </div>
+     <span class="tag">
+      33 个任务 · 2 种物理后端
+     </span>
+    </div>
+    <section class="card experiments-card">
+     <div class="card-heading">
+      <h2>训练实验</h2>
+      <span class="badge" id="training-count">0 个运行中</span>
+     </div>
+     <div id="training-list" class="training-list" aria-label="训练实验列表">
+      <p class="empty">尚未启动实验。下方配置每次启动一个独立训练，可同时运行多个。</p>
+     </div>
+     <div class="monitor-toolbar">
+      <div><strong id="selected-training">未选择实验</strong><p id="selected-details" class="hint"></p></div>
+      <button class="danger" data-stop="train" disabled="" type="button">停止所选训练</button>
+     </div>
+     <p class="hint">选择实验切换下方指标、预览和日志。每个训练独立运行；共用 GPU 时共享显存与算力，
+      可分别指定 cuda:0、cuda:1。停止一个实验不会停止其他实验或预览。</p>
+    </section>
+    <div class="stats">
+     <article>
+      <span>
+       所选训练状态
+      </span>
+      <strong id="train-state">
+       尚未开始
+      </strong>
+      <small id="train-pid">
+       等待启动新实验
+      </small>
+     </article>
+     <article>
+      <span>
+       已完成迭代 / 目标
+      </span>
+      <strong id="iteration">
+       —
+      </strong>
+      <small>
+       以训练日志为准
+      </small>
+     </article>
+     <article>
+      <span>
+       采样速度
+      </span>
+      <strong id="fps">
+       —
+      </strong>
+      <small>
+       steps / second
+      </small>
+     </article>
+     <article>
+      <span>
+       平均奖励
+      </span>
+      <strong id="reward">
+       —
+      </strong>
+      <small>
+       来自最近一次日志
+      </small>
+     </article>
+    </div>
+    <div class="workspace-grid">
+     <section class="card">
+      <div class="card-heading">
+       <h2>
+        启动新实验
+       </h2>
+       <span class="muted">
+        EXPERIMENT
+       </span>
+      </div>
+      <form id="train-form">
+       <div class="field">
+        <label for="run_name">
+         实验名称
+        </label>
+        <input id="run_name" maxlength="80" name="run_name" required="" value="microduck_experiment"/>
+       </div>
+       <div class="form-grid">
+        <div class="field">
+         <label for="solver">
+          物理后端
+         </label>
+         <select id="solver" name="solver">
+          <option value="synreal">
+           SynReal · CUDA
+          </option>
+          <option value="mujoco">
+           MuJoCo
+          </option>
+         </select>
+        </div>
+        <div class="field">
+         <label for="task">
+          训练任务
+         </label>
+         <select id="task" name="task">
+         </select>
+        </div>
+        <div class="field">
+         <label for="environment_profile">
+          训练环境
+         </label>
+         <select id="environment_profile" name="environment_profile">
+          <option value="official">
+           任务默认地形
+          </option>
+          <option value="mixed_soft_pad">
+           平地 + 海绵软垫
+          </option>
+          <option value="hammock">
+           吊床
+          </option>
+          <option value="sand">
+           沙地
+          </option>
+          <option value="steps">
+           台阶
+          </option>
+         </select>
+        </div>
+        <div class="field">
+         <label for="device">
+          计算设备
+         </label>
+         <input id="device" name="device" required="" value="cuda:0"/>
+        </div>
+        <div class="field">
+         <label for="num_envs">
+          并行环境数量
+         </label>
+         <input id="num_envs" max="65536" min="1" name="num_envs" placeholder="跟随 env.py" type="number"/>
+        </div>
+        <div class="field">
+         <label for="iterations">
+          本次训练轮数
+         </label>
+         <input id="iterations" max="10000000" min="1" name="iterations" required="" type="number" value="1000"/>
+        </div>
+       </div>
+       <div class="info-note" id="environment-note">
+        环境默认值读取中…
+       </div>
+       <div class="field">
+        <label for="mode">
+         初始化方式
+        </label>
+        <select id="mode" name="mode">
+         <option value="new">
+          从零开始
+         </option>
+         <option value="resume">
+          严格续训 · 恢复优化器与归一化
+         </option>
+         <option value="transfer">
+          迁移初始化 · SynReal Velocity
+         </option>
+        </select>
+       </div>
+       <div class="info-note" id="initialization-help" aria-live="polite"></div>
+       <div hidden="" id="source-fields">
+        <div class="field">
+         <label for="train-checkpoint">
+          来源权重路径
+         </label>
+         <input id="train-checkpoint" name="checkpoint" placeholder="在「模型与评估」中选择后填入，或输入 .pt 路径"/>
+        </div>
+        <label class="check" id="restore-label">
+         <input name="use_checkpoint_environment" type="checkbox"/>
+         恢复权重记录的历史环境
+        </label>
+       </div>
+       <details>
+        <summary>
+         训练参数与高级设置
+         <span>
+          可选覆盖
+         </span>
+        </summary>
+        <p class="hint">
+         留空使用任务默认值。续训沿用权重中的 PPO 配置。
+        </p>
+        <div class="form-grid" id="ppo-fields">
+         <div class="field">
+          <label for="learning_rate">
+           学习率
+          </label>
+          <input id="learning_rate" max="1" min="0.000000001" name="learning_rate" step="any" type="number"/>
+         </div>
+         <div class="field">
+          <label for="entropy_coef">
+           熵系数
+          </label>
+          <input id="entropy_coef" max="1" min="0" name="entropy_coef" step="any" type="number"/>
+         </div>
+         <div class="field">
+          <label for="num_steps_per_env">
+           每轮采样步数
+          </label>
+          <input id="num_steps_per_env" max="10000" min="1" name="num_steps_per_env" type="number"/>
+         </div>
+         <div class="field">
+          <label for="save_interval">
+           权重保存间隔 / 轮
+          </label>
+          <input id="save_interval" max="1000000" min="1" name="save_interval" type="number"/>
+         </div>
+         <div class="field">
+          <label for="num_learning_epochs">
+           PPO epochs
+          </label>
+          <input id="num_learning_epochs" max="100" min="1" name="num_learning_epochs" type="number"/>
+         </div>
+         <div class="field">
+          <label for="num_mini_batches">
+           Mini-batches
+          </label>
+          <input id="num_mini_batches" max="1024" min="1" name="num_mini_batches" type="number"/>
+         </div>
+         <div class="field">
+          <label for="schedule">
+           学习率调度
+          </label>
+          <select id="schedule" name="schedule">
+           <option value="default">
+            任务默认
+           </option>
+           <option value="adaptive">
+            Adaptive
+           </option>
+           <option value="fixed">
+            Fixed
+           </option>
+          </select>
+         </div>
+        </div>
+        <div class="form-grid">
+         <div class="field">
+          <label for="seed">
+           随机种子
+          </label>
+          <input id="seed" max="2147483647" min="0" name="seed" type="number" value="42"/>
+         </div>
+         <div class="field">
+          <label for="pad_probability">
+           软垫环境比例（固定分组）
+          </label>
+          <input id="pad_probability" max="1" min="0" name="pad_probability" placeholder="跟随 env.py" step="any" type="number"/>
+         </div>
+         <div class="field">
+          <label for="friction">
+           脚底摩擦随机化
+          </label>
+          <select id="friction" name="friction">
+           <option value="default">
+            跟随环境
+           </option>
+           <option value="on">
+            开启
+           </option>
+           <option value="off">
+            关闭
+           </option>
+          </select>
+         </div>
+        </div>
+        <label class="check">
+         <input name="self_collisions" type="checkbox"/>
+         启用自碰撞
+        </label>
+       </details>
+       <div class="form-actions">
+        <button class="primary" id="start-train" type="submit">
+         ＋ 启动一个新训练
+        </button>
+       </div>
+       <p class="hint">
+        每次启动都创建独立实验，运行中也可以继续启动。停止操作在上方实验列表中进行。
+        停止会保留已保存的权重；关闭网页不会停止训练。
+       </p>
+      </form>
+     </section>
+     <div class="right-column">
+      <section class="card preview-card">
+       <div class="card-heading">
+        <h2>
+         所选实验预览
+        </h2>
+        <span class="badge" id="preview-state">
+         未打开
+        </span>
+       </div>
+       <div aria-hidden="true" class="scene-art">
+        <div class="orbit orbit-one">
+        </div>
+        <div class="orbit orbit-two">
+        </div>
+        <div class="duck">
+         μ
+        </div>
+        <span class="scene-axis">
+         Z ↑   X →
+        </span>
+        <span class="scene-label">
+         POLICY PREVIEW
+        </span>
+       </div>
+       <h3>
+        随时观察，自由切换。
+       </h3>
+       <p>
+        使用上方所选实验的最新权重打开独立 3D 窗口。不同实验可分别预览，切换选择不会关闭已打开的窗口。
+       </p>
+       <div class="info-note">
+        预览是保存时刻的策略快照，不自动热更新。关闭后重新打开即可查看最新权重。
+       </div>
+       <p class="path-text" id="preview-checkpoint">
+        等待训练保存第一个模型
+       </p>
+       <div class="button-row">
+        <button class="primary" id="open-preview" type="button">
+         ↗ 预览所选实验
+        </button>
+        <button data-stop="preview" disabled="">
+         关闭所选预览
+        </button>
+       </div>
+       <p class="hint">
+        默认 1 个环境、零速度指令。窗口中 I/K 前后，J/L 侧移，U/O 转向。
+       </p>
+      </section>
+      <section class="card compact">
+       <div class="card-heading">
+        <h2>
+         实验工具
+        </h2>
+        <span class="muted">
+         TOOLS
+        </span>
+       </div>
+       <p>
+        在 TensorBoard 查看奖励、损失、速度误差与软垫统计。
+       </p>
+       <div class="button-row">
+        <button id="start-tensorboard">
+         启动 TensorBoard
+        </button>
+        <a href="http://127.0.0.1:6006" rel="noopener" target="_blank">
+         打开 ↗
+        </a>
+        <button data-stop="tensorboard" disabled="">
+         停止
+        </button>
+       </div>
+       <p class="hint" id="auth-note">
+       </p>
+      </section>
+     </div>
+    </div>
+   </section>
+   <section class="page" hidden="" id="evaluation">
+    <div class="page-heading">
+     <div>
+      <div class="eyebrow">
+       CHECKPOINT / REPLAY / COMPARE
+      </div>
+      <h1>
+       模型与评估
+       <span class="title-dot">
+        .
+       </span>
+      </h1>
+      <p>
+       选择训练好的模型，在独立窗口检查策略表现。
+      </p>
+     </div>
+     <button id="refresh-models">
+      ↻ 刷新模型
+     </button>
+    </div>
+    <div class="workspace-grid">
+     <section class="card">
+      <div class="card-heading">
+       <h2>
+        模型库
+       </h2>
+       <span class="muted" id="run-count">
+        加载中
+       </span>
+      </div>
+      <div class="field">
+       <label for="run-search">
+        搜索实验
+       </label>
+       <input id="run-search" placeholder="实验名称、任务或后端"/>
+      </div>
+      <div class="run-list" id="run-list">
+      </div>
+      <p class="path-text" id="model-root">
+      </p>
+     </section>
+     <section class="card">
+      <div class="card-heading">
+       <h2>
+        可视化评估
+       </h2>
+       <span class="badge" id="evaluation-state">
+        未打开
+       </span>
+      </div>
+      <form id="eval-form">
+       <div class="field">
+        <label for="model-select">
+         已选实验的模型权重
+        </label>
+        <select id="model-select">
+         <option value="">
+          请先选择左侧实验
+         </option>
+        </select>
+       </div>
+       <div class="field">
+        <label for="eval-checkpoint">
+         权重文件路径（也可手动输入）
+        </label>
+        <input id="eval-checkpoint" name="checkpoint" placeholder="/path/to/model_100.pt" required=""/>
+       </div>
+       <p class="hint">
+        自动使用权重记录的任务与后端；权重旁必须保留 config.json。
+       </p>
+       <div class="form-grid">
+        <div class="field">
+         <label for="eval-device">
+          计算设备
+         </label>
+         <input id="eval-device" name="device" required="" value="cuda:0"/>
+        </div>
+        <div class="field">
+         <label for="eval-envs">
+          显示环境数
+         </label>
+         <input id="eval-envs" max="128" min="1" name="num_envs" required="" type="number" value="1"/>
+        </div>
+        <div class="field">
+         <label for="vx">
+          前后速度 / m·s⁻¹
+         </label>
+         <input id="vx" max="5" min="-5" name="vx" step="0.05" type="number" value="0"/>
+        </div>
+        <div class="field">
+         <label for="vy">
+          侧向速度 / m·s⁻¹
+         </label>
+         <input id="vy" max="5" min="-5" name="vy" step="0.05" type="number" value="0"/>
+        </div>
+        <div class="field">
+         <label for="yaw">
+          转向速度 / rad·s⁻¹
+         </label>
+         <input id="yaw" max="5" min="-5" name="yaw" step="0.1" type="number" value="0"/>
+        </div>
+       </div>
+       <label class="check">
+        <input name="use_checkpoint_environment" type="checkbox"/>
+        使用权重记录的历史环境参数
+       </label>
+       <label class="check">
+        <input name="allow_recipe_mismatch" type="checkbox"/>
+        允许旧配方权重进行诊断回放
+       </label>
+       <p class="hint">
+        默认使用当前 env.py。允许旧配方仅用于诊断，不代表严格复现原训练。
+       </p>
+       <details>
+        <summary>
+         诊断选项
+        </summary>
+        <label class="check">
+         <input name="diagnostics" type="checkbox"/>
+         输出指令敏感度和速度诊断
+        </label>
+       </details>
+       <div class="form-actions">
+        <button class="primary" id="start-eval" type="submit">
+         ↗ 打开评估窗口
+        </button>
+        <button data-stop="evaluation" disabled="" type="button">
+         关闭评估
+        </button>
+       </div>
+       <button class="wide-button" id="use-source" type="button">
+        将此权重填入训练来源 →
+       </button>
+       <p class="hint">
+        3D 窗口显示在运行控制台的机器桌面上。此处为交互回放，不是自动成功率评测。
+       </p>
+      </form>
+     </section>
+    </div>
+   </section>
+   <section class="card logs-card">
+    <div class="card-heading">
+     <div class="log-heading">
+      <h2>
+       运行日志
+      </h2>
+      <select aria-label="日志来源" id="log-kind"><option value="">暂无进程</option></select>
+     </div>
+     <div class="button-row">
+      <label class="check">
+       <input checked="" id="auto-scroll" type="checkbox"/>
+       自动滚动
+      </label>
+      <button id="download-log">
+       下载当前日志
+      </button>
+     </div>
+    </div>
+    <pre id="log-output" tabindex="0">尚无运行日志。配置实验后，点击「开始训练」。</pre>
+    <div class="log-footer">
+     <span id="log-path">
+      日志与模型保存在本机
+     </span>
+     <span id="log-exit">
+     </span>
+    </div>
+   </section>
+   <footer>
+    MicroDuck Workbench
+    <span>
+     训练默认无渲染 · 模型独立评估 · 环境统一配置
+    </span>
+   </footer>
+  </main>
+ </body>
+</html>

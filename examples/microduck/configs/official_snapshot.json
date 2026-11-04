@@ -68541,19 +68541,44 @@
           "weight": -1.0
         },
         "air_time": {
-          "func": "mjlab_microduck.tasks.mdp.feet_air_time_upright",
+          "func": "commanded_feet_air_time",
+          "weight": 3.0,
+          "local": true,
           "params": {
             "sensor_name": "feet_ground_contact",
-            "threshold_min": 0.125,
-            "threshold_max": 0.3,
             "command_name": "twist",
-            "command_threshold": 0.01,
-            "gate_tilt_above_deg": 40.0
-          },
-          "weight": 3.0
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
         },
         "foot_clearance": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_clearance",
+          "func": "commanded_foot_clearance",
           "params": {
             "target_height": 0.02,
             "height_sensor_name": "foot_height_scan",
@@ -68645,20 +68670,87 @@
                 ]
               },
               "preserve_order": false
+            },
+            "height_speed_gain": 0.035,
+            "max_height": 0.045,
+            "yaw_speed_scale": 0.02,
+            "height_std": 0.015,
+            "motion_speed_scale": 0.05,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
             }
           },
-          "weight": -2.0
+          "weight": 2.0,
+          "local": true
         },
         "foot_swing_height": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_swing_height",
+          "func": "commanded_foot_swing_height",
           "params": {
             "sensor_name": "feet_ground_contact",
             "height_sensor_name": "foot_height_scan",
             "target_height": 0.02,
             "command_name": "twist",
-            "command_threshold": 0.01
+            "command_threshold": 0.01,
+            "height_speed_gain": 0.035,
+            "max_height": 0.045,
+            "height_std": 0.015,
+            "yaw_speed_scale": 0.02,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
           },
-          "weight": -0.25
+          "weight": 0.25,
+          "local": true
         },
         "foot_slip": {
           "func": "mjlab.tasks.velocity.mdp.rewards.feet_slip",
@@ -68756,6 +68848,48 @@
           },
           "weight": -0.1
         },
+        "commanded_foot_placement": {
+          "func": "commanded_foot_placement_reward",
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "command_name": "twist",
+            "command_threshold": 0.03,
+            "placement_std": 0.025,
+            "step_time_s": 0.18,
+            "velocity_error_gain": 0.25,
+            "max_step_m": 0.08,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          },
+          "weight": 0.15,
+          "local": true
+        },
         "self_collisions": {
           "func": "mjlab.tasks.velocity.mdp.rewards.self_collision_cost",
           "params": {
@@ -68767,9 +68901,12 @@
           "func": "mjlab_microduck.tasks.mdp.head_pose_tracking",
           "params": {
             "command_name": "head_pose",
-            "std": 0.5
+            "std": 0.5,
+            "fine_std": 0.1,
+            "fine_weight": 0.3
           },
-          "weight": 2.0
+          "weight": 2.0,
+          "local": true
         },
         "body_pose_tracking": {
           "func": "mjlab_microduck.tasks.mdp.body_pose_tracking_locomotion",
@@ -69332,6 +69469,103 @@
             "up_z": 0.09
           },
           "weight": 0.0
+        },
+        "neck_action_rate": {
+          "func": "mjlab_microduck.tasks.mdp.neck_action_rate_l2",
+          "params": {},
+          "weight": -0.05,
+          "local": true
+        },
+        "head_angular_velocity": {
+          "func": "head_angular_velocity_penalty",
+          "params": {
+            "body_name": "jaw_soft",
+            "command_name": "head_pose",
+            "height_low": 0.09,
+            "height_high": 0.11,
+            "tilt_full_deg": 20.0,
+            "tilt_zero_deg": 40.0,
+            "command_grace_s": 0.3,
+            "command_ramp_s": 0.2
+          },
+          "weight": -0.05,
+          "local": true
+        },
+        "gait_cadence": {
+          "func": "commanded_gait_cadence",
+          "weight": 0.5,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
+        },
+        "gait_overdue": {
+          "func": "commanded_gait_overdue",
+          "weight": -0.1,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
         }
       },
       "curricula": {
@@ -72690,19 +72924,44 @@
           "weight": -1.0
         },
         "air_time": {
-          "func": "mjlab_microduck.tasks.mdp.feet_air_time_upright",
+          "func": "commanded_feet_air_time",
+          "weight": 3.0,
+          "local": true,
           "params": {
             "sensor_name": "feet_ground_contact",
-            "threshold_min": 0.125,
-            "threshold_max": 0.3,
             "command_name": "twist",
-            "command_threshold": 0.01,
-            "gate_tilt_above_deg": 40.0
-          },
-          "weight": 3.0
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
         },
         "foot_clearance": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_clearance",
+          "func": "commanded_foot_clearance",
           "params": {
             "target_height": 0.02,
             "height_sensor_name": "foot_height_scan",
@@ -72794,20 +73053,87 @@
                 ]
               },
               "preserve_order": false
+            },
+            "height_speed_gain": 0.035,
+            "max_height": 0.045,
+            "yaw_speed_scale": 0.02,
+            "height_std": 0.015,
+            "motion_speed_scale": 0.05,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
             }
           },
-          "weight": -2.0
+          "weight": 2.0,
+          "local": true
         },
         "foot_swing_height": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_swing_height",
+          "func": "commanded_foot_swing_height",
           "params": {
             "sensor_name": "feet_ground_contact",
             "height_sensor_name": "foot_height_scan",
             "target_height": 0.02,
             "command_name": "twist",
-            "command_threshold": 0.01
+            "command_threshold": 0.01,
+            "height_speed_gain": 0.035,
+            "max_height": 0.045,
+            "height_std": 0.015,
+            "yaw_speed_scale": 0.02,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
           },
-          "weight": -0.25
+          "weight": 0.25,
+          "local": true
         },
         "foot_slip": {
           "func": "mjlab.tasks.velocity.mdp.rewards.feet_slip",
@@ -72905,6 +73231,48 @@
           },
           "weight": -0.1
         },
+        "commanded_foot_placement": {
+          "func": "commanded_foot_placement_reward",
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "command_name": "twist",
+            "command_threshold": 0.03,
+            "placement_std": 0.025,
+            "step_time_s": 0.18,
+            "velocity_error_gain": 0.25,
+            "max_step_m": 0.08,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          },
+          "weight": 0.15,
+          "local": true
+        },
         "self_collisions": {
           "func": "mjlab.tasks.velocity.mdp.rewards.self_collision_cost",
           "params": {
@@ -72916,9 +73284,12 @@
           "func": "mjlab_microduck.tasks.mdp.head_pose_tracking",
           "params": {
             "command_name": "head_pose",
-            "std": 0.5
+            "std": 0.5,
+            "fine_std": 0.1,
+            "fine_weight": 0.3
           },
-          "weight": 2.0
+          "weight": 2.0,
+          "local": true
         },
         "body_pose_tracking": {
           "func": "mjlab_microduck.tasks.mdp.body_pose_tracking_locomotion",
@@ -73481,6 +73852,103 @@
             "up_z": 0.09
           },
           "weight": 0.0
+        },
+        "neck_action_rate": {
+          "func": "mjlab_microduck.tasks.mdp.neck_action_rate_l2",
+          "params": {},
+          "weight": -0.05,
+          "local": true
+        },
+        "head_angular_velocity": {
+          "func": "head_angular_velocity_penalty",
+          "params": {
+            "body_name": "jaw_soft",
+            "command_name": "head_pose",
+            "height_low": 0.09,
+            "height_high": 0.11,
+            "tilt_full_deg": 20.0,
+            "tilt_zero_deg": 40.0,
+            "command_grace_s": 0.3,
+            "command_ramp_s": 0.2
+          },
+          "weight": -0.05,
+          "local": true
+        },
+        "gait_cadence": {
+          "func": "commanded_gait_cadence",
+          "weight": 0.5,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
+        },
+        "gait_overdue": {
+          "func": "commanded_gait_overdue",
+          "weight": -0.1,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
         }
       },
       "curricula": {
@@ -73753,12 +74221,12 @@
                 "step": 0,
                 "velocity_range": {
                   "x": [
-                    -0.3,
-                    0.3
+                    0,
+                    0
                   ],
                   "y": [
-                    -0.3,
-                    0.3
+                    0,
+                    0
                   ]
                 }
               },
@@ -73766,12 +74234,12 @@
                 "step": 2400,
                 "velocity_range": {
                   "x": [
-                    -0.6,
-                    0.6
+                    0,
+                    0
                   ],
                   "y": [
-                    -0.6,
-                    0.6
+                    0,
+                    0
                   ]
                 }
               },
@@ -73779,12 +74247,12 @@
                 "step": 9600,
                 "velocity_range": {
                   "x": [
-                    -0.9,
-                    0.9
+                    0,
+                    0
                   ],
                   "y": [
-                    -0.9,
-                    0.9
+                    0,
+                    0
                   ]
                 }
               },
@@ -73792,12 +74260,12 @@
                 "step": 19200,
                 "velocity_range": {
                   "x": [
-                    -1.2,
-                    1.2
+                    -0.2,
+                    0.2
                   ],
                   "y": [
-                    -1.2,
-                    1.2
+                    -0.2,
+                    0.2
                   ]
                 }
               }
@@ -76926,19 +77394,44 @@
           "weight": -1.0
         },
         "air_time": {
-          "func": "mjlab_microduck.tasks.mdp.feet_air_time_upright",
+          "func": "commanded_feet_air_time",
+          "weight": 3.0,
+          "local": true,
           "params": {
             "sensor_name": "feet_ground_contact",
-            "threshold_min": 0.125,
-            "threshold_max": 0.3,
             "command_name": "twist",
-            "command_threshold": 0.01,
-            "gate_tilt_above_deg": 40.0
-          },
-          "weight": 3.0
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
         },
         "foot_clearance": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_clearance",
+          "func": "commanded_foot_clearance",
           "params": {
             "target_height": 0.02,
             "height_sensor_name": "foot_height_scan",
@@ -77030,20 +77523,87 @@
                 ]
               },
               "preserve_order": false
+            },
+            "height_speed_gain": 0.035,
+            "max_height": 0.045,
+            "yaw_speed_scale": 0.02,
+            "height_std": 0.015,
+            "motion_speed_scale": 0.05,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
             }
           },
-          "weight": -2.0
+          "weight": 2.0,
+          "local": true
         },
         "foot_swing_height": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_swing_height",
+          "func": "commanded_foot_swing_height",
           "params": {
             "sensor_name": "feet_ground_contact",
             "height_sensor_name": "foot_height_scan",
             "target_height": 0.02,
             "command_name": "twist",
-            "command_threshold": 0.01
+            "command_threshold": 0.01,
+            "height_speed_gain": 0.035,
+            "max_height": 0.045,
+            "height_std": 0.015,
+            "yaw_speed_scale": 0.02,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
           },
-          "weight": -0.25
+          "weight": 0.25,
+          "local": true
         },
         "foot_slip": {
           "func": "mjlab.tasks.velocity.mdp.rewards.feet_slip",
@@ -77141,6 +77701,48 @@
           },
           "weight": -0.1
         },
+        "commanded_foot_placement": {
+          "func": "commanded_foot_placement_reward",
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "command_name": "twist",
+            "command_threshold": 0.03,
+            "placement_std": 0.025,
+            "step_time_s": 0.18,
+            "velocity_error_gain": 0.25,
+            "max_step_m": 0.08,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          },
+          "weight": 0.15,
+          "local": true
+        },
         "self_collisions": {
           "func": "mjlab.tasks.velocity.mdp.rewards.self_collision_cost",
           "params": {
@@ -77152,9 +77754,12 @@
           "func": "mjlab_microduck.tasks.mdp.head_pose_tracking",
           "params": {
             "command_name": "head_pose",
-            "std": 0.5
+            "std": 0.5,
+            "fine_std": 0.1,
+            "fine_weight": 0.3
           },
-          "weight": 2.0
+          "weight": 2.0,
+          "local": true
         },
         "body_pose_tracking": {
           "func": "mjlab_microduck.tasks.mdp.body_pose_tracking_locomotion",
@@ -77717,6 +78322,103 @@
             "up_z": 0.09
           },
           "weight": 0.0
+        },
+        "neck_action_rate": {
+          "func": "mjlab_microduck.tasks.mdp.neck_action_rate_l2",
+          "params": {},
+          "weight": -0.05,
+          "local": true
+        },
+        "head_angular_velocity": {
+          "func": "head_angular_velocity_penalty",
+          "params": {
+            "body_name": "jaw_soft",
+            "command_name": "head_pose",
+            "height_low": 0.09,
+            "height_high": 0.11,
+            "tilt_full_deg": 20.0,
+            "tilt_zero_deg": 40.0,
+            "command_grace_s": 0.3,
+            "command_ramp_s": 0.2
+          },
+          "weight": -0.05,
+          "local": true
+        },
+        "gait_cadence": {
+          "func": "commanded_gait_cadence",
+          "weight": 0.5,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
+        },
+        "gait_overdue": {
+          "func": "commanded_gait_overdue",
+          "weight": -0.1,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
         }
       },
       "curricula": {
@@ -81161,19 +81863,44 @@
           "weight": -1.0
         },
         "air_time": {
-          "func": "mjlab_microduck.tasks.mdp.feet_air_time_upright",
+          "func": "commanded_feet_air_time",
+          "weight": 3.0,
+          "local": true,
           "params": {
             "sensor_name": "feet_ground_contact",
-            "threshold_min": 0.125,
-            "threshold_max": 0.3,
             "command_name": "twist",
-            "command_threshold": 0.01,
-            "gate_tilt_above_deg": 40.0
-          },
-          "weight": 3.0
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
         },
         "foot_clearance": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_clearance",
+          "func": "commanded_foot_clearance",
           "params": {
             "target_height": 0.02,
             "height_sensor_name": "foot_height_scan",
@@ -81265,20 +81992,87 @@
                 ]
               },
               "preserve_order": false
+            },
+            "height_speed_gain": 0.035,
+            "max_height": 0.045,
+            "yaw_speed_scale": 0.02,
+            "height_std": 0.015,
+            "motion_speed_scale": 0.05,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
             }
           },
-          "weight": -2.0
+          "weight": 2.0,
+          "local": true
         },
         "foot_swing_height": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_swing_height",
+          "func": "commanded_foot_swing_height",
           "params": {
             "sensor_name": "feet_ground_contact",
             "height_sensor_name": "foot_height_scan",
             "target_height": 0.02,
             "command_name": "twist",
-            "command_threshold": 0.01
+            "command_threshold": 0.01,
+            "height_speed_gain": 0.035,
+            "max_height": 0.045,
+            "height_std": 0.015,
+            "yaw_speed_scale": 0.02,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
           },
-          "weight": -0.25
+          "weight": 0.25,
+          "local": true
         },
         "foot_slip": {
           "func": "mjlab.tasks.velocity.mdp.rewards.feet_slip",
@@ -81376,6 +82170,48 @@
           },
           "weight": -0.1
         },
+        "commanded_foot_placement": {
+          "func": "commanded_foot_placement_reward",
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "command_name": "twist",
+            "command_threshold": 0.03,
+            "placement_std": 0.025,
+            "step_time_s": 0.18,
+            "velocity_error_gain": 0.25,
+            "max_step_m": 0.08,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          },
+          "weight": 0.15,
+          "local": true
+        },
         "self_collisions": {
           "func": "mjlab.tasks.velocity.mdp.rewards.self_collision_cost",
           "params": {
@@ -81387,9 +82223,12 @@
           "func": "mjlab_microduck.tasks.mdp.head_pose_tracking",
           "params": {
             "command_name": "head_pose",
-            "std": 0.5
+            "std": 0.5,
+            "fine_std": 0.1,
+            "fine_weight": 0.3
           },
-          "weight": 2.0
+          "weight": 2.0,
+          "local": true
         },
         "body_pose_tracking": {
           "func": "mjlab_microduck.tasks.mdp.body_pose_tracking_locomotion",
@@ -81952,6 +82791,103 @@
             "up_z": 0.09
           },
           "weight": 0.0
+        },
+        "neck_action_rate": {
+          "func": "mjlab_microduck.tasks.mdp.neck_action_rate_l2",
+          "params": {},
+          "weight": -0.05,
+          "local": true
+        },
+        "head_angular_velocity": {
+          "func": "head_angular_velocity_penalty",
+          "params": {
+            "body_name": "jaw_soft",
+            "command_name": "head_pose",
+            "height_low": 0.09,
+            "height_high": 0.11,
+            "tilt_full_deg": 20.0,
+            "tilt_zero_deg": 40.0,
+            "command_grace_s": 0.3,
+            "command_ramp_s": 0.2
+          },
+          "weight": -0.05,
+          "local": true
+        },
+        "gait_cadence": {
+          "func": "commanded_gait_cadence",
+          "weight": 0.5,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
+        },
+        "gait_overdue": {
+          "func": "commanded_gait_overdue",
+          "weight": -0.1,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
         }
       },
       "curricula": {
@@ -85321,18 +86257,44 @@
           "weight": -0.1
         },
         "air_time": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_air_time",
+          "func": "commanded_feet_air_time",
+          "weight": 3.0,
+          "local": true,
           "params": {
             "sensor_name": "feet_ground_contact",
-            "threshold_min": 0.125,
-            "threshold_max": 0.3,
             "command_name": "twist",
-            "command_threshold": 0.01
-          },
-          "weight": 3.0
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
         },
         "foot_clearance": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_clearance",
+          "func": "commanded_foot_clearance",
           "params": {
             "target_height": 0.02,
             "height_sensor_name": "foot_height_scan",
@@ -85424,20 +86386,87 @@
                 ]
               },
               "preserve_order": false
+            },
+            "height_speed_gain": 0.035,
+            "max_height": 0.045,
+            "yaw_speed_scale": 0.02,
+            "height_std": 0.015,
+            "motion_speed_scale": 0.05,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
             }
           },
-          "weight": -2.0
+          "weight": 2.0,
+          "local": true
         },
         "foot_swing_height": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_swing_height",
+          "func": "commanded_foot_swing_height",
           "params": {
             "sensor_name": "feet_ground_contact",
             "height_sensor_name": "foot_height_scan",
             "target_height": 0.02,
             "command_name": "twist",
-            "command_threshold": 0.01
+            "command_threshold": 0.01,
+            "height_speed_gain": 0.035,
+            "max_height": 0.045,
+            "height_std": 0.015,
+            "yaw_speed_scale": 0.02,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
           },
-          "weight": -0.25
+          "weight": 0.25,
+          "local": true
         },
         "foot_slip": {
           "func": "mjlab.tasks.velocity.mdp.rewards.feet_slip",
@@ -85535,6 +86564,48 @@
           },
           "weight": -0.1
         },
+        "commanded_foot_placement": {
+          "func": "commanded_foot_placement_reward",
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "command_name": "twist",
+            "command_threshold": 0.03,
+            "placement_std": 0.025,
+            "step_time_s": 0.18,
+            "velocity_error_gain": 0.25,
+            "max_step_m": 0.08,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          },
+          "weight": 0.15,
+          "local": true
+        },
         "self_collisions": {
           "func": "mjlab.tasks.velocity.mdp.rewards.self_collision_cost",
           "params": {
@@ -85546,9 +86617,12 @@
           "func": "mjlab_microduck.tasks.mdp.head_pose_tracking",
           "params": {
             "command_name": "head_pose",
-            "std": 0.5
+            "std": 0.5,
+            "fine_std": 0.1,
+            "fine_weight": 0.3
           },
-          "weight": 2.0
+          "weight": 2.0,
+          "local": true
         },
         "body_pose_tracking": {
           "func": "mjlab_microduck.tasks.mdp.body_pose_tracking_6d",
@@ -85568,6 +86642,103 @@
             "tau_s": 1.0
           },
           "weight": 0.0
+        },
+        "neck_action_rate": {
+          "func": "mjlab_microduck.tasks.mdp.neck_action_rate_l2",
+          "params": {},
+          "weight": -0.05,
+          "local": true
+        },
+        "head_angular_velocity": {
+          "func": "head_angular_velocity_penalty",
+          "params": {
+            "body_name": "jaw_soft",
+            "command_name": "head_pose",
+            "height_low": 0.09,
+            "height_high": 0.11,
+            "tilt_full_deg": 20.0,
+            "tilt_zero_deg": 40.0,
+            "command_grace_s": 0.3,
+            "command_ramp_s": 0.2
+          },
+          "weight": -0.05,
+          "local": true
+        },
+        "gait_cadence": {
+          "func": "commanded_gait_cadence",
+          "weight": 0.5,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
+        },
+        "gait_overdue": {
+          "func": "commanded_gait_overdue",
+          "weight": -0.1,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
         }
       },
       "curricula": {
@@ -91045,7 +92216,7 @@
             "command_name": "twist",
             "std": 0.31622776601683794
           },
-          "weight": 2.0
+          "weight": 2.5
         },
         "track_angular_velocity": {
           "func": "mjlab.tasks.velocity.mdp.rewards.track_angular_velocity",
@@ -91354,7 +92525,7 @@
               "preserve_order": false
             }
           },
-          "weight": -0.05
+          "weight": -0.15
         },
         "angular_momentum": {
           "func": "mjlab.tasks.velocity.mdp.rewards.angular_momentum_penalty",
@@ -91374,20 +92545,46 @@
           "weight": -0.1
         },
         "air_time": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_air_time",
+          "func": "commanded_feet_air_time",
+          "weight": 2.5,
+          "local": true,
           "params": {
             "sensor_name": "feet_ground_contact",
-            "threshold_min": 0.125,
-            "threshold_max": 0.3,
             "command_name": "twist",
-            "command_threshold": 0.01
-          },
-          "weight": 3.0
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
         },
         "foot_clearance": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_clearance",
+          "func": "commanded_foot_clearance",
           "params": {
-            "target_height": 0.02,
+            "target_height": 0.03,
             "height_sensor_name": "foot_height_scan",
             "command_name": "twist",
             "command_threshold": 0.01,
@@ -91477,23 +92674,90 @@
                 ]
               },
               "preserve_order": false
+            },
+            "height_speed_gain": 0.035,
+            "max_height": 0.05,
+            "yaw_speed_scale": 0.02,
+            "height_std": 0.015,
+            "motion_speed_scale": 0.05,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
             }
           },
-          "weight": -2.0
+          "weight": 2.0,
+          "local": true
         },
         "foot_swing_height": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_swing_height",
+          "func": "commanded_foot_swing_height",
           "params": {
             "sensor_name": "feet_ground_contact",
             "height_sensor_name": "foot_height_scan",
-            "target_height": 0.02,
+            "target_height": 0.03,
             "command_name": "twist",
-            "command_threshold": 0.01
+            "command_threshold": 0.01,
+            "height_speed_gain": 0.035,
+            "max_height": 0.05,
+            "height_std": 0.015,
+            "yaw_speed_scale": 0.02,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
           },
-          "weight": -0.25
+          "weight": 0.25,
+          "local": true
         },
         "foot_slip": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_slip",
+          "func": "feet_surface_slip",
           "params": {
             "sensor_name": "feet_ground_contact",
             "command_name": "twist",
@@ -91586,7 +92850,50 @@
               "preserve_order": false
             }
           },
-          "weight": -0.1
+          "weight": -0.1,
+          "local": true
+        },
+        "commanded_foot_placement": {
+          "func": "commanded_foot_placement_reward",
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "command_name": "twist",
+            "command_threshold": 0.03,
+            "placement_std": 0.025,
+            "step_time_s": 0.18,
+            "velocity_error_gain": 0.25,
+            "max_step_m": 0.08,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          },
+          "weight": 0.15,
+          "local": true
         },
         "self_collisions": {
           "func": "mjlab.tasks.velocity.mdp.rewards.self_collision_cost",
@@ -91599,9 +92906,12 @@
           "func": "mjlab_microduck.tasks.mdp.head_pose_tracking",
           "params": {
             "command_name": "head_pose",
-            "std": 0.5
+            "std": 0.5,
+            "fine_std": 0.1,
+            "fine_weight": 0.3
           },
-          "weight": 2.0
+          "weight": 2.0,
+          "local": true
         },
         "body_pose_tracking": {
           "func": "mjlab_microduck.tasks.mdp.body_pose_tracking_6d",
@@ -91655,8 +92965,16 @@
           "params": {
             "asset_cfg": {
               "name": "robot",
-              "joint_names": [".*hip_roll.*"],
-              "joint_ids": {"slice": [null, null, null]}
+              "joint_names": [
+                ".*hip_roll.*"
+              ],
+              "joint_ids": {
+                "slice": [
+                  null,
+                  null,
+                  null
+                ]
+              }
             }
           },
           "local": true
@@ -91678,6 +92996,165 @@
             "angular_threshold": 0.1,
             "lateral_threshold": 0.05,
             "max_tilt_deg": 35.0
+          },
+          "local": true
+        },
+        "soft_pad_failure": {
+          "func": "soft_pad_failure",
+          "weight": -50.0,
+          "params": {},
+          "local": true
+        },
+        "command_progress": {
+          "func": "command_progress_deficit",
+          "weight": -0.25,
+          "params": {
+            "command_threshold": 0.03,
+            "speed_floor": 0.05,
+            "speed_tolerance": 0.02,
+            "max_deficit": 2.0,
+            "grace_seconds": 0.3,
+            "ramp_seconds": 0.3,
+            "max_tilt_deg": 45.0
+          },
+          "local": true
+        },
+        "neck_action_rate": {
+          "func": "mjlab_microduck.tasks.mdp.neck_action_rate_l2",
+          "params": {},
+          "weight": -0.05,
+          "local": true
+        },
+        "head_angular_velocity": {
+          "func": "head_angular_velocity_penalty",
+          "params": {
+            "body_name": "jaw_soft",
+            "command_name": "head_pose",
+            "height_low": 0.09,
+            "height_high": 0.11,
+            "tilt_full_deg": 20.0,
+            "tilt_zero_deg": 40.0,
+            "command_grace_s": 0.3,
+            "command_ramp_s": 0.2
+          },
+          "weight": -0.05,
+          "local": true
+        },
+        "gait_cadence": {
+          "func": "commanded_gait_cadence",
+          "weight": 0.5,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
+        },
+        "gait_overdue": {
+          "func": "commanded_gait_overdue",
+          "weight": -0.1,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
+        },
+        "foot_swing_progress": {
+          "func": "commanded_foot_swing_progress",
+          "weight": 0.5,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            },
+            "advance_time_fraction": 0.6,
+            "min_advance": 0.008,
+            "max_advance": 0.05,
+            "freshness_cycles": 1.5
           },
           "local": true
         }
@@ -91722,27 +93199,27 @@
             "standing_stages": [
               {
                 "step": 0,
-                "rel_standing_envs": 0.2
+                "rel_standing_envs": 0.05
               },
               {
                 "step": 12000,
-                "rel_standing_envs": 0.25
+                "rel_standing_envs": 0.1
               },
               {
                 "step": 18000,
-                "rel_standing_envs": 0.25
+                "rel_standing_envs": 0.15
               },
               {
                 "step": 24000,
-                "rel_standing_envs": 0.3
+                "rel_standing_envs": 0.2
               },
               {
                 "step": 36000,
-                "rel_standing_envs": 0.3
+                "rel_standing_envs": 0.25
               },
               {
                 "step": 48000,
-                "rel_standing_envs": 0.35
+                "rel_standing_envs": 0.25
               }
             ]
           },
@@ -92006,7 +93483,64 @@
           },
           "rel_turn_in_place_envs": 0.15,
           "turn_in_place_min_frac": 0.4,
-          "adapter_command_class": "VelocityCommandCommandOnlyCfg"
+          "adapter_command_class": "VelocityCommandCommandOnlyCfg",
+          "local": true,
+          "local_sampling": {
+            "axis_velocity_bins": {
+              "lin_vel_x": [
+                [
+                  0.05,
+                  0.15
+                ],
+                [
+                  0.15,
+                  0.25
+                ],
+                [
+                  0.25,
+                  0.4
+                ]
+              ],
+              "lin_vel_y": [
+                [
+                  0.03,
+                  0.1
+                ],
+                [
+                  0.1,
+                  0.2
+                ],
+                [
+                  0.2,
+                  0.3
+                ]
+              ],
+              "ang_vel_z": [
+                [
+                  0.05,
+                  0.2
+                ],
+                [
+                  0.2,
+                  0.5
+                ],
+                [
+                  0.5,
+                  1.0
+                ]
+              ]
+            },
+            "pure_translation_fraction": 0.5,
+            "start_stop_fraction": 0.2,
+            "standing_time_range_s": [
+              2.0,
+              3.0
+            ],
+            "moving_time_range_s": [
+              3.0,
+              4.0
+            ]
+          }
         },
         "head_pose": {
           "resampling_time_range": [
@@ -97574,18 +99108,44 @@
           "weight": -0.1
         },
         "air_time": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_air_time",
+          "func": "commanded_feet_air_time",
+          "weight": 3.0,
+          "local": true,
           "params": {
             "sensor_name": "feet_ground_contact",
-            "threshold_min": 0.125,
-            "threshold_max": 0.3,
             "command_name": "twist",
-            "command_threshold": 0.01
-          },
-          "weight": 3.0
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
         },
         "foot_clearance": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_clearance",
+          "func": "commanded_foot_clearance",
           "params": {
             "target_height": 0.02,
             "height_sensor_name": "foot_height_scan",
@@ -97677,20 +99237,87 @@
                 ]
               },
               "preserve_order": false
+            },
+            "height_speed_gain": 0.035,
+            "max_height": 0.045,
+            "yaw_speed_scale": 0.02,
+            "height_std": 0.015,
+            "motion_speed_scale": 0.05,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
             }
           },
-          "weight": -2.0
+          "weight": 2.0,
+          "local": true
         },
         "foot_swing_height": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_swing_height",
+          "func": "commanded_foot_swing_height",
           "params": {
             "sensor_name": "feet_ground_contact",
             "height_sensor_name": "foot_height_scan",
             "target_height": 0.02,
             "command_name": "twist",
-            "command_threshold": 0.01
+            "command_threshold": 0.01,
+            "height_speed_gain": 0.035,
+            "max_height": 0.045,
+            "height_std": 0.015,
+            "yaw_speed_scale": 0.02,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
           },
-          "weight": -0.25
+          "weight": 0.25,
+          "local": true
         },
         "foot_slip": {
           "func": "mjlab.tasks.velocity.mdp.rewards.feet_slip",
@@ -97788,6 +99415,48 @@
           },
           "weight": -0.1
         },
+        "commanded_foot_placement": {
+          "func": "commanded_foot_placement_reward",
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "command_name": "twist",
+            "command_threshold": 0.03,
+            "placement_std": 0.025,
+            "step_time_s": 0.18,
+            "velocity_error_gain": 0.25,
+            "max_step_m": 0.08,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          },
+          "weight": 0.15,
+          "local": true
+        },
         "self_collisions": {
           "func": "mjlab.tasks.velocity.mdp.rewards.self_collision_cost",
           "params": {
@@ -97799,9 +99468,12 @@
           "func": "mjlab_microduck.tasks.mdp.head_pose_tracking",
           "params": {
             "command_name": "head_pose",
-            "std": 0.5
+            "std": 0.5,
+            "fine_std": 0.1,
+            "fine_weight": 0.3
           },
-          "weight": 2.0
+          "weight": 2.0,
+          "local": true
         },
         "body_pose_tracking": {
           "func": "mjlab_microduck.tasks.mdp.body_pose_tracking_6d",
@@ -97821,6 +99493,103 @@
             "tau_s": 1.0
           },
           "weight": 0.0
+        },
+        "neck_action_rate": {
+          "func": "mjlab_microduck.tasks.mdp.neck_action_rate_l2",
+          "params": {},
+          "weight": -0.05,
+          "local": true
+        },
+        "head_angular_velocity": {
+          "func": "head_angular_velocity_penalty",
+          "params": {
+            "body_name": "jaw_soft",
+            "command_name": "head_pose",
+            "height_low": 0.09,
+            "height_high": 0.11,
+            "tilt_full_deg": 20.0,
+            "tilt_zero_deg": 40.0,
+            "command_grace_s": 0.3,
+            "command_ramp_s": 0.2
+          },
+          "weight": -0.05,
+          "local": true
+        },
+        "gait_cadence": {
+          "func": "commanded_gait_cadence",
+          "weight": 0.5,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
+        },
+        "gait_overdue": {
+          "func": "commanded_gait_overdue",
+          "weight": -0.1,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
         }
       },
       "curricula": {
@@ -100716,18 +102485,44 @@
           "weight": -0.1
         },
         "air_time": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_air_time",
+          "func": "commanded_feet_air_time",
+          "weight": 3.0,
+          "local": true,
           "params": {
             "sensor_name": "feet_ground_contact",
-            "threshold_min": 0.125,
-            "threshold_max": 0.3,
             "command_name": "twist",
-            "command_threshold": 0.01
-          },
-          "weight": 3.0
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
         },
         "foot_clearance": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_clearance",
+          "func": "commanded_foot_clearance",
           "params": {
             "target_height": 0.02,
             "height_sensor_name": "foot_height_scan",
@@ -100819,20 +102614,87 @@
                 ]
               },
               "preserve_order": false
+            },
+            "height_speed_gain": 0.035,
+            "max_height": 0.045,
+            "yaw_speed_scale": 0.02,
+            "height_std": 0.015,
+            "motion_speed_scale": 0.05,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
             }
           },
-          "weight": -2.0
+          "weight": 2.0,
+          "local": true
         },
         "foot_swing_height": {
-          "func": "mjlab.tasks.velocity.mdp.rewards.feet_swing_height",
+          "func": "commanded_foot_swing_height",
           "params": {
             "sensor_name": "feet_ground_contact",
             "height_sensor_name": "foot_height_scan",
             "target_height": 0.02,
             "command_name": "twist",
-            "command_threshold": 0.01
+            "command_threshold": 0.01,
+            "height_speed_gain": 0.035,
+            "max_height": 0.045,
+            "height_std": 0.015,
+            "yaw_speed_scale": 0.02,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
           },
-          "weight": -0.25
+          "weight": 0.25,
+          "local": true
         },
         "foot_slip": {
           "func": "mjlab.tasks.velocity.mdp.rewards.feet_slip",
@@ -100930,6 +102792,48 @@
           },
           "weight": -0.1
         },
+        "commanded_foot_placement": {
+          "func": "commanded_foot_placement_reward",
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "command_name": "twist",
+            "command_threshold": 0.03,
+            "placement_std": 0.025,
+            "step_time_s": 0.18,
+            "velocity_error_gain": 0.25,
+            "max_step_m": 0.08,
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          },
+          "weight": 0.15,
+          "local": true
+        },
         "self_collisions": {
           "func": "mjlab.tasks.velocity.mdp.rewards.self_collision_cost",
           "params": {
@@ -100941,9 +102845,12 @@
           "func": "mjlab_microduck.tasks.mdp.head_pose_tracking",
           "params": {
             "command_name": "head_pose",
-            "std": 0.5
+            "std": 0.5,
+            "fine_std": 0.1,
+            "fine_weight": 0.3
           },
-          "weight": 2.0
+          "weight": 2.0,
+          "local": true
         },
         "body_pose_tracking": {
           "func": "mjlab_microduck.tasks.mdp.body_pose_tracking_6d",
@@ -100963,6 +102870,103 @@
             "tau_s": 1.0
           },
           "weight": 0.0
+        },
+        "neck_action_rate": {
+          "func": "mjlab_microduck.tasks.mdp.neck_action_rate_l2",
+          "params": {},
+          "weight": -0.05,
+          "local": true
+        },
+        "head_angular_velocity": {
+          "func": "head_angular_velocity_penalty",
+          "params": {
+            "body_name": "jaw_soft",
+            "command_name": "head_pose",
+            "height_low": 0.09,
+            "height_high": 0.11,
+            "tilt_full_deg": 20.0,
+            "tilt_zero_deg": 40.0,
+            "command_grace_s": 0.3,
+            "command_ramp_s": 0.2
+          },
+          "weight": -0.05,
+          "local": true
+        },
+        "gait_cadence": {
+          "func": "commanded_gait_cadence",
+          "weight": 0.5,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
+        },
+        "gait_overdue": {
+          "func": "commanded_gait_overdue",
+          "weight": -0.1,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            }
+          }
         }
       },
       "curricula": {

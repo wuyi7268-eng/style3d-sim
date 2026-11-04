@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "newton>=1.5.0",
+    # The Linux prebuilt extension links CUDA 12 even when PyTorch uses CUDA 13.
+    "nvidia-cuda-runtime-cu12>=12.9,<13; sys_platform == 'linux'",
     "numpy>=2.0.0",
     "typing-extensions>=4.5",
 ]

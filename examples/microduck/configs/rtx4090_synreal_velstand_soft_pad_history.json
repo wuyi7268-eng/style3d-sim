@@ -1,0 +1,25 @@
+{
+  "training": {
+    "solver": "synreal",
+    "task": "velstand",
+    "environment_profile": "mixed_soft_pad",
+    "policy_variant": "history",
+    "physics_substeps": 8,
+    "joint_constraint_primal_iterations": 4,
+    "inherit_training_stage": false,
+    "iterations": 60000,
+    "seed": 42,
+    "device": "cuda:0",
+    "viewer": "null",
+    "run_name": "velstand_history_soft_pad_finetune"
+  },
+  "ppo": {
+    "num_steps_per_env": 24,
+    "save_interval": 50,
+    "algorithm": {
+      "learning_rate": 0.0001,
+      "schedule": "fixed",
+      "entropy_coef": 0.001
+    }
+  }
+}

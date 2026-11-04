@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import torch
 
+from examples.microduck.common import setup
 from examples.microduck.play import update_playback_observation, update_velocity_command
 
 
@@ -27,3 +28,13 @@ def test_velocity_command_is_restored_after_reset():
     command = [0.2, 0.0, 0.0]
     update_velocity_command(env, None, command, previous_command=command)
     torch.testing.assert_close(env.commands[:, :3], torch.tensor([command]))
+
+
+def test_playback_can_disable_fall_resets():
+    args, _, _ = setup("play", ["--viewer", "null"])
+    assert args.fall_reset is False
+
+
+def test_playback_can_reenable_fall_resets():
+    args, _, _ = setup("play", ["--viewer", "null", "--fall-reset"])
+    assert args.fall_reset is True

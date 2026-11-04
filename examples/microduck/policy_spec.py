@@ -1,8 +1,11 @@
-"""Robot asset, servo order and position-PD task constants."""
+"""Robot assets, task scene construction, servo order and position-PD constants."""
 
+import math
 from pathlib import Path
 
 import newton
+import torch
+import warp as wp
 
 from .task_registry import ROLLER_TASKS, base_task
 
@@ -104,3 +107,28 @@ def filter_authored_collider(builder, collider):
         other_type, other_affinity = masks(shape)
         if not ((ctype & other_affinity) or (other_type & affinity)):
             builder.add_shape_collision_filter_pair(shape, collider)
+
+
+class TaskLogic:
+    def __init__(self, task, robot):
+        self.task = task
+        self.ball_body = None
+        if base_task(task) == "ballkick":
+            self.ball_q = len(robot.joint_q)
+            self.ball_qd = len(robot.joint_qd)
+            self.ball_body = robot.add_link(
+                xform=wp.transform(wp.vec3(0.09, -0.042, 0.035), wp.quat_identity()), label="kick_ball"
+            )
+            joint = robot.add_joint_free(child=self.ball_body)
+            robot.add_articulation([joint], label="ball")
+            cfg = robot.default_shape_cfg.copy()
+            cfg.density = 0.015 / (4.0 / 3.0 * math.pi * 0.035**3)
+            cfg.mu = 0.5
+            robot.add_shape_sphere(self.ball_body, radius=0.035, cfg=cfg, color=(1.0, 0.4, 0.05))
+
+    def initialize(self, env):
+        self.spawn = env.initial_q.clone()
+        self.spawn_velocity = torch.zeros_like(env._views()[1])
+
+    def reset_state(self, env, ids, q):
+        q[ids] = self.spawn[ids]

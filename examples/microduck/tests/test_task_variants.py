@@ -7,10 +7,9 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from examples.microduck.config import ppo_config
 from examples.microduck.env import MicroDuckEnv
-from examples.microduck.official_ppo import apply_official_ppo, microduck_symmetry
 from examples.microduck.policy_spec import JOINT_NAMES, build_robot, joint_coordinates
+from examples.microduck.ppo import apply_official_ppo, microduck_symmetry, ppo_config
 from examples.microduck.task_registry import TASKS, task_key
 
 ROOT = Path(__file__).parents[1]
@@ -87,7 +86,7 @@ def test_sitstand_binary_command_and_rate_limited_target():
 
 
 def test_roulade_airborne_rotation_does_not_advance_frontier():
-    from examples.microduck import official_reward_functions as reward
+    from examples.microduck import reward_functions as reward
 
     env = MicroDuckEnv(task="roulade", device="cpu", num_envs=1)
     try:

@@ -1,0 +1,12 @@
+{
+  "training": {
+    "solver": "synreal",
+    "task": "standup",
+    "environment_profile": "official",
+    "iterations": 15000,
+    "seed": 42,
+    "device": "cuda:0",
+    "viewer": "null",
+    "run_name": "standup"
+  }
+}

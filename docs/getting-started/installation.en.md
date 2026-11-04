@@ -53,6 +53,10 @@ The optional `examples` extra includes viewer and example dependencies.
 Omit `--extra examples` for the base API only. See [Demos](../guides/demos.en.md) for training dependencies.
 `--no-install-project` prepares dependencies first; the package and native extension are installed together in the next step.
 
+On Linux, the base dependencies include `nvidia-cuda-runtime-cu12`. Importing `style3d_sim` resolves
+`libcudart.so.12` through the system loader or this wheel before loading the native extension.
+No PyTorch import or manual `LD_LIBRARY_PATH` setting is needed. PyTorch may use its own CUDA 13 runtime alongside it.
+
 Activate the environment and run the following installation commands in the same terminal:
 
 === "Windows PowerShell"

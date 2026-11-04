@@ -1,0 +1,21 @@
+{
+  "training": {
+    "solver": "synreal",
+    "task": "velocity",
+    "iterations": 30000,
+    "seed": 42,
+    "device": "cuda:0",
+    "viewer": "null",
+    "run_name": "velocity_flat_pad_finetune",
+    "environment_profile": "mixed_soft_pad"
+  },
+  "ppo": {
+    "num_steps_per_env": 24,
+    "save_interval": 100,
+    "algorithm": {
+      "learning_rate": 0.0001,
+      "schedule": "fixed",
+      "entropy_coef": 0.001
+    }
+  }
+}

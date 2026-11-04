@@ -16,6 +16,10 @@ uv run python -c "import sys, sysconfig; print(sys.executable); print(sysconfig.
 For Windows `DLL load failed` or missing Linux shared libraries, inspect binary runtime dependencies,
 the driver, and CUDA versions. Python path changes alone may not resolve these errors.
 
+On Linux, `libcudart.so.12` is provided by the declared `nvidia-cuda-runtime-cu12` dependency and resolved
+automatically at import time. If it is missing, reinstall the project with its dependencies in the active environment;
+installing PyTorch with CUDA 13 alone does not satisfy the native extension's CUDA 12 requirement.
+
 ## An Older Version Is Imported
 
 ```bash

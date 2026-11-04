@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import torch
 
-from examples.microduck.official_recipe import OfficialRecipe, SNAPSHOT
+from examples.microduck.recipe import SNAPSHOT, OfficialRecipe
 
 
 def test_vertical_cost_and_weighted_total():

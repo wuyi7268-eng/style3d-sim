@@ -9,8 +9,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from examples.microduck.official_recipe import SNAPSHOT, OfficialRecipe, RobotView
 from examples.microduck.policy_spec import HOME
+from examples.microduck.recipe import SNAPSHOT, OfficialRecipe, RobotView
 
 
 def recipe_for_test(count=5):
@@ -163,7 +163,9 @@ def test_target_limit_cost_can_improve_even_when_physical_joints_remain_at_stops
             assert not spec["rewards"].get("action_over_limit", {}).get("local", False)
 
 
-@pytest.mark.parametrize("step,expected_standing", [(0, 0.20), (12001, 0.25), (24001, 0.30), (48001, 0.35)])
+@pytest.mark.parametrize(
+    "step,expected_standing", [(0, 0.05), (12001, 0.10), (18001, 0.15), (24001, 0.20), (36001, 0.25), (48001, 0.25)]
+)
 def test_velocity_standing_curriculum_samples_idle_commands_without_losing_turns(step, expected_standing):
     spec = deepcopy(json.loads(SNAPSHOT.read_text())["tasks"]["velocity"])
     recipe = OfficialRecipe.__new__(OfficialRecipe)
@@ -177,6 +179,8 @@ def test_velocity_standing_curriculum_samples_idle_commands_without_losing_turns
     recipe.env = SimpleNamespace(commands=torch.zeros(count, 13), num_envs=count, family="velocity", device=recipe.device)
     recipe.standing = torch.zeros(count, dtype=torch.bool)
     recipe.timers = {"twist": torch.zeros(count)}
+    # Check the unchanged random-command cohort independently of the local start/stop cohort.
+    recipe.velocity_commands = None
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(42)
         recipe.update_commands(torch.arange(count))
@@ -200,17 +204,19 @@ def test_local_standing_curriculum_is_scoped_and_export_preserves_it():
     assert all(not task["curricula"].get("standing_envs", {}).get("local")
                for name, task in tasks.items() if name != "velocity")
     # The exporter runs in upstream's separate venv; execute its dependency-free merge helper here.
-    tree = ast.parse((Path(__file__).parents[1] / "export_official_recipe.py").read_text())
+    tree = ast.parse((Path(__file__).parents[1] / "export_recipe.py").read_text())
     helper = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "preserve_local_terms")
     namespace = {}
     exec(compile(ast.Module(body=[helper], type_ignores=[]), "export_local_terms", "exec"), namespace)
     original = {"tasks": {"velocity": {"rewards": {"custom": {"local": True, "weight": -1},
                                                    "official": {"weight": 999}},
-                                       "curricula": {"standing_envs": curriculum}}}}
+                                       "curricula": {"standing_envs": curriculum},
+                                       "commands": {"twist": tasks["velocity"]["commands"]["twist"]}}}}
     exported = {"tasks": {"velocity": {"rewards": {"official": {"weight": 2}},
                                        "curricula": {"standing_envs": {"params": {}}}}}}
     namespace["preserve_local_terms"](exported, original)
     assert exported["tasks"]["velocity"]["curricula"]["standing_envs"] == curriculum
+    assert exported["tasks"]["velocity"]["commands"]["twist"] == tasks["velocity"]["commands"]["twist"]
     assert exported["tasks"]["velocity"]["rewards"] == {"official": {"weight": 2},
                                                          "custom": {"local": True, "weight": -1}}
 

@@ -5,9 +5,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import newton
 import numpy as np
 import pytest
-import newton
 
 sys.path.insert(0, str(Path(__file__).parents[3]))
 from examples.microduck.policy_spec import ASSET, HOME, JOINT_NAMES, build_robot
@@ -50,7 +50,7 @@ def test_self_collision_allows_left_right_foot_contact():
         assert (pair in robot.shape_collision_filter_pairs) is not enabled
 
 
-def test_cli_defaults_to_official_recipe():
+def test_cli_defaults_to_recipe():
     from examples.microduck.common import setup
 
     args, _, _ = setup("train", [])
