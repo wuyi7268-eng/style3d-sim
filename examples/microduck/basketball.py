@@ -291,7 +291,7 @@ class BasketballEnv(MicroDuckEnv):
 
 def source_fingerprint():
     root = Path(__file__).parent
-    paths = [root / name for name in ("basketball.py", "basketball_scene.py", "basketball_task.py", "env.py",
+    paths = [root / name for name in ("basketball.py", "basketball_scene.py", "basketball_task.py", "basketball_policy.py", "env.py",
                                       "policy_spec.py", "adapter.py", "ppo.py", "scenes.py", "stability.py", "events.py")]
     paths += sorted(ASSET.parent.rglob("*.xml"))
     digest = hashlib.sha256()
@@ -353,6 +353,7 @@ def main(argv=None):
     parser.add_argument("--solver", choices=("synreal", "mujoco"), default="synreal")
     parser.add_argument("--config", type=Path, default=CONFIG)
     parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument("--init-from-onnx", type=Path, help="Warm-start b11 actor; fresh local critic and optimizer")
     parser.add_argument("--pretrained", action="store_true")
     parser.add_argument("--policy-file", type=Path, help="Locally downloaded release policy.onnx (with --pretrained)")
     parser.add_argument("--allow-source-mismatch", action="store_true")
@@ -375,6 +376,8 @@ def main(argv=None):
         parser.error("--pretrained is for play and cannot be combined with --checkpoint")
     if args.policy_file and not args.pretrained:
         parser.error("--policy-file requires --pretrained")
+    if args.init_from_onnx and (args.mode != "train" or args.checkpoint or args.pretrained):
+        parser.error("--init-from-onnx requires fresh train, without --checkpoint or --pretrained")
     if args.mode == "preview" and args.checkpoint:
         parser.error("preview uses HOME PD; use play for checkpoints")
     if args.allow_source_mismatch and args.mode != "play":
@@ -392,6 +395,10 @@ def main(argv=None):
         from .basketball_policy import pretrained_policy
 
         release = pretrained_policy(args.policy_file)
+    if args.init_from_onnx:
+        from .basketball_policy import pretrained_policy
+
+        pretrained_policy(args.init_from_onnx)
     wp.set_device(args.device)
     if args.solver == "synreal":
         if not wp.get_device().is_cuda:
@@ -407,6 +414,8 @@ def main(argv=None):
             viewer = ViewerGL(width=1280, height=900)
         env = BasketballEnv(config, count, args.device, viewer, args.seed, solver=args.solver, auto_reset=args.mode == "train")
         ppo = metadata["ppo"] if metadata else runner_config(config, count)
+        if args.init_from_onnx:
+            ppo["freeze_actor_normalization"] = True
         directory = None
         if args.mode == "train":
             stamp = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d_%H-%M-%S_%f")
@@ -414,12 +423,22 @@ def main(argv=None):
             directory.mkdir(parents=True)
             record = {**env.cfg, "ppo": ppo, "source_fingerprint": source_fingerprint(), "num_envs": count,
                       "seed": args.seed, "resume_from": str(args.checkpoint) if args.checkpoint else None}
+            if metadata and "initialization" in metadata:
+                record["initialization"] = metadata["initialization"]
             (directory / "config.json").write_text(json.dumps(record, indent=2) + "\n")
         runner = None
         if args.mode != "preview" and not args.pretrained:
             runner = create_runner(env, ppo, str(directory) if directory else None, args.device, training=args.mode == "train")
             runner.git_status_repos = []
             attach_checkpoint_state(runner, env)
+            if ppo.get("freeze_actor_normalization"):
+                runner.obs_normalizer.until = 0
+            if args.init_from_onnx:
+                from .basketball_policy import initialize_actor_from_onnx
+
+                record["initialization"] = initialize_actor_from_onnx(runner, args.init_from_onnx)
+                (directory / "config.json").write_text(json.dumps(record, indent=2) + "\n")
+                print("Initialized released b11 actor; fresh local critic/optimizer, frozen actor normalization.", flush=True)
             if args.checkpoint:
                 infos = runner.load(str(args.checkpoint), load_optimizer=args.mode == "train")
                 if args.mode == "train":

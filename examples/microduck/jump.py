@@ -439,11 +439,12 @@ class JumpActorCritic(ActorCritic):
 class JumpSensors(OfficialSensors):
     """Opt into cloth contacts locally, without changing other tasks' sensors."""
 
-    def __init__(self, env, robot):
+    def __init__(self, env, robot, *, flat_ground=False):
         proxy = copy(env)
-        proxy.mixed_terrain = True
+        proxy.mixed_terrain = not flat_ground
         mask = torch.zeros(env.model.particle_count, dtype=torch.int32, device=env.device)
-        mask[env.terrain.cloth_indices] = 1
+        if not flat_ground:
+            mask[env.terrain.cloth_indices] = 1
         proxy.terrain = SimpleNamespace(pad_particle=wp.from_torch(mask))
         super().__init__(proxy, robot)
         # The full-collision asset names its feet ankle_left/right, whereas the
@@ -470,7 +471,7 @@ class JumpEnv:
     num_actions = 14
 
     def __init__(self, config, num_envs=8, device="cuda:0", viewer=None, seed=42, height=None, physics=None,
-                 *, auto_reset=True):
+                 *, auto_reset=True, terrain="trampoline"):
         self.config, self.task_cfg = deepcopy(config), config["task"]
         self.device, self.num_envs = torch.device(device), num_envs
         self.auto_reset = auto_reset
@@ -478,6 +479,9 @@ class JumpEnv:
         self.max_height = self.task_cfg.get("shaping_version", 1) >= 4
         self.rebound = self.task_cfg.get("shaping_version", 1) == 5
         self.contract = config["contract"]
+        if terrain not in ("trampoline", "flat"):
+            raise ValueError("Jump playback terrain must be trampoline or flat")
+        self.playback_terrain = terrain
         self.current_dim = CURRENT_DIM if self.max_height else CURRENT_DIM + 1
         self.critic_dim = CRITIC_DIM if self.max_height else CRITIC_DIM + 1
         self.frame_dim = SENSOR_DIM if self.rebound else FRAME_DIM
@@ -499,7 +503,7 @@ class JumpEnv:
             num_envs=num_envs,
             device=device,
             task="velocity",
-            terrain="trampoline",
+            terrain="trampoline" if terrain == "trampoline" else "default",
             viewer=viewer,
             seed=seed,
             randomize_foot_friction=False,
@@ -511,16 +515,17 @@ class JumpEnv:
         self.num_obs = self.current_dim + self.task_cfg["history_length"] * self.frame_dim
         self.num_privileged_obs = self.critic_dim + self.task_cfg["history_length"] * self.frame_dim
         robot, _, _ = build_robot(task="velocity")
-        self.base.official.sensors = JumpSensors(self.base, robot)
+        self.base.official.sensors = JumpSensors(self.base, robot, flat_ground=terrain == "flat")
         self.sensors = self.base.official.sensors
         self.model, self.terrain = self.base.model, self.base.terrain
+        terrain_cfg = deepcopy(getattr(self.terrain, "cfg", {"kind": "flat"}))
         self.cfg = {
             "task": "trampoline_jump",
             "robot_asset": ASSET.name,
             "robot_collision_model": "velocity",
             "observation_contract": self.contract,
             "physics": self.base.cfg["physics"],
-            "terrain": deepcopy(self.terrain.cfg),
+            "terrain": terrain_cfg,
             "jump": deepcopy(config),
             "assistance": False,
             "deployment_compatible": False,
@@ -543,7 +548,7 @@ class JumpEnv:
             self.cfg["deployment_limits"] = "Requires raw acceleration runtime support and hardware/actuator calibration"
 
         self._cache = None
-        self._surface_topology = self._world_triangles()
+        self._surface_topology = self._world_triangles() if terrain == "trampoline" else None
         self.reset()
 
     @property
@@ -587,6 +592,13 @@ class JumpEnv:
 
     def surface(self, points):
         """Batched barycentric height, velocity and normal queries on current cloth faces."""
+        if self.playback_terrain == "flat":
+            shape = points.shape[:2]
+            height = torch.zeros(shape, device=self.device)
+            velocity = torch.zeros((*shape, 3), device=self.device)
+            normal = torch.zeros_like(velocity)
+            normal[..., 2] = 1
+            return height, velocity, normal, torch.ones(shape, dtype=torch.bool, device=self.device)
         tri = wp.to_torch(self.base.states[0].particle_q)[self._surface_topology]
         velocities = wp.to_torch(self.base.states[0].particle_qd)[self._surface_topology]
         a, b, c = tri.unbind(2)
@@ -629,8 +641,13 @@ class JumpEnv:
         feet, foot_v = torch.stack(feet, 1), torch.stack(foot_v, 1)
         points = torch.cat((feet, pose[:, None, :3]), 1)
         height, surface_v, normal, hit = self.surface(points)
-        # Only cloth contact counts as support; standing on a frame or the floor is not a jump landing.
-        contact = self.sensors.feet.data.soft_found > 0
+        # Flat playback uses rigid foot contacts; trampoline playback uses cloth contacts only.
+        foot_contacts = (
+            self.sensors.feet.data.found
+            if self.playback_terrain == "flat"
+            else self.sensors.feet.data.soft_found
+        )
+        contact = foot_contacts > 0
         return SimpleNamespace(
             q=q[:, env.qi] - env.home,
             qd=qd[:, env.qdi],
@@ -690,7 +707,8 @@ class JumpEnv:
             q, qd, _, _ = env._views(state)
             q[ids] = env.initial_q[ids]
             q[ids, :2] = 0
-            q[ids, 2] += SCENE_CONFIG.trampoline_height + 0.005
+            if self.playback_terrain == "trampoline":
+                q[ids, 2] += SCENE_CONFIG.trampoline_height + 0.005
             qd[ids] = 0
             env.sync_selected_state(state, ids)
         env.actions[ids] = 0
@@ -741,7 +759,7 @@ class JumpEnv:
                     contact_time,
                     s.foot_clearance * 5,
                     s.relative_foot_v.flatten(1),
-                    (s.height - SCENE_CONFIG.trampoline_height) * 5,
+                    (s.height - (SCENE_CONFIG.trampoline_height if self.playback_terrain == "trampoline" else 0.0)) * 5,
                     s.surface_v[..., 2],
                     s.normal[:, 2, :2],
                     s.pose[:, :2] * 5,
@@ -810,7 +828,7 @@ class JumpEnv:
         for name in ("particle_q", "particle_qd"):
             if not torch.isfinite(wp.to_torch(getattr(self.base.states[0], name))).all():
                 raise FloatingPointError(f"Non-finite trampoline {name}")
-        if int(self.base.contacts.soft_contact_count.numpy()[0]) >= self.base.contacts.soft_contact_max:
+        if self.playback_terrain == "trampoline" and int(self.base.contacts.soft_contact_count.numpy()[0]) >= self.base.contacts.soft_contact_max:
             raise RuntimeError("Trampoline contact capacity exhausted")
         state = self.state()
         terms, success, failure = self.cycle.advance(state, self.step_dt)
@@ -1012,6 +1030,8 @@ def create_parser():
     parser.add_argument("mode", choices=("train", "play"))
     parser.add_argument("--config", type=Path, default=CONFIG_PATH)
     parser.add_argument("--checkpoint", type=Path, help="Required for play; resumes training when used with train")
+    parser.add_argument("--terrain", choices=("trampoline", "flat"), default="trampoline",
+                        help="Playback support surface; flat playback is diagnostic and does not alter the policy")
     parser.add_argument(
         "--init-from", type=Path,
         help="Optional warm-start checkpoint for train; loads policy weights but resets optimizer and task state",
@@ -1049,6 +1069,8 @@ def main(argv=None):
         parser.error("play requires --checkpoint")
     if args.mode == "play" and args.init_from is not None:
         parser.error("--init-from is only supported for train")
+    if args.mode == "train" and args.terrain != "trampoline":
+        parser.error("Training terrain is fixed to trampoline")
     if args.mode == "train" and args.checkpoint is not None and args.init_from is not None:
         parser.error("--checkpoint and --init-from are mutually exclusive")
     if args.allow_source_mismatch and args.mode != "play":
@@ -1098,7 +1120,7 @@ def main(argv=None):
     try:
         env = JumpEnv(
             config, count, args.device, viewer, args.seed, height, PhysicsConfig(**metadata["physics"]) if metadata else None,
-            auto_reset=args.mode == "train",
+            auto_reset=args.mode == "train", terrain=args.terrain,
         )
         ppo = metadata["ppo"] if metadata else runner_config(config, count)
         log_dir = None
@@ -1146,7 +1168,7 @@ def main(argv=None):
             report, keys = [], {}
             bindings = playback_keys(maximum) if viewer else ()
             if maximum:
-                print("Jump as high as possible. R: reset all environments. No auto reset.", flush=True)
+                print(f"Jump as high as possible on {args.terrain}. R: reset all environments. No auto reset.", flush=True)
             else:
                 print("Height-command policy. +/-: next target; 0: stand; R: reset. No auto reset.", flush=True)
             print("Right-drag the robot to apply force; Space pauses/resumes physics.", flush=True)

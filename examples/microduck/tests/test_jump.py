@@ -472,6 +472,29 @@ def test_diagnostic_replay_allows_source_change_but_checks_materials(tmp_path, c
         checkpoint_metadata(path, allow_source_mismatch=True)
 
 
+def test_flat_playback_surface_is_infinite_and_stationary():
+    env = object.__new__(JumpEnv)
+    env.playback_terrain = "flat"
+    env.device = torch.device("cpu")
+    points = torch.tensor([[[0.0, 0.0, 0.4], [20.0, -3.0, 0.8]]])
+
+    height, velocity, normal, hit = env.surface(points)
+
+    assert torch.equal(height, torch.zeros((1, 2)))
+    assert torch.equal(velocity, torch.zeros((1, 2, 3)))
+    assert torch.equal(normal[..., 2], torch.ones((1, 2)))
+    assert hit.all()
+
+
+def test_jump_training_rejects_flat_terrain_before_physics(capsys):
+    from examples.microduck.jump import main
+
+    with pytest.raises(SystemExit) as error:
+        main(["train", "--terrain", "flat"])
+    assert error.value.code == 2
+    assert "Training terrain is fixed to trampoline" in capsys.readouterr().err
+
+
 def test_source_override_rejected_for_training_before_physics(capsys):
     from examples.microduck.jump import main
 

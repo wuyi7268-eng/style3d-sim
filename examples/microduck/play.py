@@ -33,6 +33,8 @@ def configure_playback_boundaries(env):
         # Crossing the pad edge is observable in playback; training keeps its surface-only curriculum.
         env.cfg["terrain"]["pad_edge_timeout_margin"] = None
         env.cfg["terrain"]["boundary_curriculum"] = "playback_cross_surface_locomotion"
+    elif getattr(env.terrain, "kind", None) == "elastic_bridge":
+        env.terrain.playback_spawn_distance = 0.05
 
 
 def wait_for_viewer_close(viewer, keep_open):

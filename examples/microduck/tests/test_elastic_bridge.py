@@ -1,5 +1,6 @@
 """Bridge anchoring, deformed support, selective reset, and walking command contracts."""
 
+import os
 from copy import deepcopy
 from dataclasses import asdict, replace
 from types import SimpleNamespace
@@ -12,6 +13,39 @@ import torch
 import warp as wp
 
 from examples.microduck.scenes import SCENE_CONFIG, SceneTerrain, add_scene
+
+
+@pytest.mark.skipif(os.environ.get("MICRODUCK_GPU_TESTS") != "1", reason="Requires SynReal login and CUDA")
+@pytest.mark.parametrize("interactive,controller", [(False, "policy"), (True, "home"), (True, "policy")])
+def test_bridge_starts_and_resets_without_presimulation(interactive, controller):
+    import style3d_sim as s3d
+    from examples.microduck.env import MicroDuckEnv
+
+    # Construction and reset must not advance physics or run a hidden relaxation solver.
+    with patch.object(s3d.NewtonSolver, "step", side_effect=AssertionError("Unexpected initialization step")):
+        env = MicroDuckEnv(solver="synreal", num_envs=1, device="cuda:0", terrain="elastic_bridge",
+                           interactive=interactive, controller=controller, randomize_foot_friction=False)
+    try:
+        indices = env.terrain.cloth_indices
+        reference = wp.to_torch(env.model.particle_q)[indices].clone()
+        fixed = wp.to_torch(env.model.particle_mass)[indices] == 0
+        for _ in range(2):
+            for state in env.states:
+                torch.testing.assert_close(wp.to_torch(state.particle_q)[indices], reference, rtol=0, atol=0)
+                assert not torch.count_nonzero(wp.to_torch(state.particle_qd)[indices])
+                env._views(state)[0][:, 0] = -3.0
+                env.sync_selected_state(state, torch.tensor([0], device=env.device))
+            actions = torch.zeros_like(env.actions) if controller == "policy" else None
+            for _ in range(3):
+                env.advance_physics(actions)
+            current = wp.to_torch(env.states[0].particle_q)[indices]
+            assert torch.isfinite(current).all()
+            assert (current[~fixed] - reference[~fixed]).norm(dim=-1).max() > 1e-4
+            torch.testing.assert_close(current[fixed], reference[fixed], rtol=0, atol=1e-7)
+            with patch.object(s3d.NewtonSolver, "step", side_effect=AssertionError("Unexpected reset step")):
+                env.reset()
+    finally:
+        env.close()
 
 
 def test_only_short_ends_are_fixed_and_span_has_no_rigid_support():
@@ -100,54 +134,23 @@ def test_support_and_reset_use_deformed_cloth_without_touching_other_world_or_ro
     torch.testing.assert_close(env.task_logic.spawn[0], torch.tensor([0., 0., rest + .125]))
     torch.testing.assert_close(env.task_logic.spawn[1], torch.tensor([0., 0., .125]))
     assert not terrain.out_of_bounds(env.task_logic.spawn).any()
-    # The relaxed shape is a reset target, never a replacement for the material's stress-free reference.
     reference = model.particle_q.numpy().copy()
-    rest = reference[selected]
-    relaxed = rest.copy()
-    movable = (model.particle_flags.numpy()[selected] & int(newton.ParticleFlags.ACTIVE)) != 0
-    relaxed[movable, 2] -= .02
-    env.solver, env.physics = object(), object()
-    with patch("examples.microduck.scenes.settled_bridge_state", return_value=(rest, relaxed, {"release_drift_m": 0.})):
-        terrain.initialize_rest_state()
-    np.testing.assert_array_equal(model.particle_q.numpy(), reference)
-    before = [state.particle_q.numpy().copy() for state in env.states]
     for state in env.states:
-        wp.to_torch(state.particle_q)[selected, 2] -= .03
+        wp.to_torch(state.particle_q)[terrain.cloth_indices, 2] -= .03
+        wp.to_torch(state.particle_qd).fill_(.2)
+        wp.to_torch(state.particle_f).fill_(.1)
+    before = [(state.particle_q.numpy().copy(), state.particle_qd.numpy().copy(), state.particle_f.numpy().copy())
+              for state in env.states]
     terrain.reset(torch.tensor([0]))
     for state, original in zip(env.states, before, strict=True):
-        np.testing.assert_array_equal(state.particle_q.numpy()[selected], relaxed)
-        np.testing.assert_array_equal(state.particle_q.numpy()[other], original[other])
-    for state in env.states:
-        state.particle_qd.zero_()
-        state.clear_forces()
-    shape = int(np.flatnonzero(model.shape_body.numpy() >= 0)[0])
-    contacts = SimpleNamespace(soft_contact_count=wp.array([0], dtype=int, device="cpu"),
-                               soft_contact_indices=wp.array([[int(selected[1]), -1, -1]], dtype=wp.vec3i, device="cpu"),
-                               soft_contact_shape=wp.array([shape], dtype=int, device="cpu"))
-    terrain.wake_bridge_contacts(contacts)
-    assert terrain.bridge_sleeping.tolist() == [True, True]
-    wp.to_torch(contacts.soft_contact_count)[0] = 1
-    terrain.wake_bridge_contacts(contacts)
-    assert terrain.bridge_sleeping.tolist() == [False, True]
-    for state in env.states:
-        wp.to_torch(state.particle_q)[terrain.cloth_indices, 2] -= .01
-    awake = env.states[0].particle_q.numpy()[selected].copy()
-    terrain.hold_sleeping_bridges()
-    np.testing.assert_array_equal(env.states[0].particle_q.numpy()[selected], awake)
-    sleeping = terrain.cloth_indices[terrain.cloth_worlds == 1]
-    torch.testing.assert_close(wp.to_torch(env.states[0].particle_q)[sleeping], terrain.reset_particle_q[sleeping])
-    wp.to_torch(env.states[0].particle_f)[sleeping[1], 2] = -.1
-    terrain.wake_bridge_contacts(contacts)
-    assert not terrain.bridge_sleeping.any()
-    terrain.reset(torch.tensor([0]))
-    assert terrain.bridge_sleeping.tolist() == [True, False]
+        np.testing.assert_array_equal(state.particle_q.numpy()[selected], reference[selected])
+        np.testing.assert_array_equal(state.particle_qd.numpy()[selected], 0)
+        np.testing.assert_array_equal(state.particle_f.numpy()[selected], 0)
+        for array, saved in zip((state.particle_q, state.particle_qd, state.particle_f), original, strict=True):
+            np.testing.assert_array_equal(array.numpy()[other], saved[other])
     env.task_logic.spawn[:] = torch.tensor([0., 0., .125])
     terrain.adjust_spawn(torch.tensor([0]))
-    torch.testing.assert_close(env.task_logic.spawn[0], torch.tensor([0., 0.,
-                               SCENE_CONFIG.elastic_bridge_height - SCENE_CONFIG.elastic_bridge_sag - .02 + .125]))
-    torch.testing.assert_close(env.task_logic.spawn[1], torch.tensor([0., 0., .125]))
-    for state in env.states:
-        np.testing.assert_array_equal(state.particle_qd.numpy()[selected], 0)
+    torch.testing.assert_close(env.task_logic.spawn[0], torch.tensor([0., 0., rest + .125]))
 
 
 def test_bridge_recipe_is_isolated_and_resampling_keeps_commands_along_bridge():

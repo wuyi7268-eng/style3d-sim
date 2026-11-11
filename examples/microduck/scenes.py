@@ -59,16 +59,17 @@ class SceneConfig:
     trampoline_density: float = 0.3
     trampoline_stretch: float = 1800.0
     trampoline_damping: float = 0.05
-    elastic_bridge_length: float = 1.2
-    elastic_bridge_width: float = 0.29
+    elastic_bridge_length: float = 0.80
+    elastic_bridge_width: float = 0.30
     elastic_bridge_height: float = 0.65
     elastic_bridge_sag: float = 0.04
     elastic_bridge_cells_x: int = 40
     elastic_bridge_cells_y: int = 10
-    elastic_bridge_density: float = 0.6
-    elastic_bridge_stretch: float = 1600.0
-    elastic_bridge_bend: float = 2.0
-    elastic_bridge_damping: float = 0.2
+    elastic_bridge_density: float = 0.10
+    elastic_bridge_stretch: float = 5000.0
+    elastic_bridge_bend: float = 0.0
+    elastic_bridge_damping: float = 1
+    elastic_bridge_friction: float = 1
     elastic_bridge_approach_length: float = 0.8
     elastic_bridge_approach_width: float = 0.8
     elastic_bridge_spawn_distance: float = 0.4
@@ -99,66 +100,6 @@ class SceneConfig:
 
 
 SCENE_CONFIG = SceneConfig()
-
-_BRIDGE_EQUILIBRIA = {}
-
-
-def settled_bridge_state(config, physics, device):
-    """Relax an unloaded template without changing its constitutive rest shape or runtime damping."""
-    import style3d_sim as s3d
-
-    key = (json.dumps(asdict(config), sort_keys=True), json.dumps(asdict(physics), sort_keys=True), str(device))
-    if key in _BRIDGE_EQUILIBRIA:
-        return _BRIDGE_EQUILIBRIA[key]
-    builder = s3d.ModelBuilder()
-    add_elastic_bridge(builder, config)
-    model = builder.finalize(device=str(device))
-    model.set_gravity((0.0, 0.0, -9.81))
-    solver = s3d.NewtonSolver(model)
-    physics.configure_synreal(solver)
-    collision = newton.CollisionPipeline(model, enable_rigid_soft_full_surface_contact=True, soft_contact_max=8192)
-    contacts = collision.contacts()
-    solver.prepare_contacts(contacts)
-    current, next_state = model.state(), model.state()
-    control = model.control()
-    indices = np.unique(model.tri_indices.numpy())
-    rest = model.particle_q.numpy()[indices].copy()
-    quiet_steps = 0
-    print("Elastic bridge: relaxing unloaded support before robot spawn...", flush=True)
-    for step in range(4000):
-        current.clear_forces()
-        collision.collide(current, contacts)
-        solver.step(current, next_state, control, contacts, physics.physics_dt)
-        current, next_state = next_state, current
-        velocity = wp.to_torch(current.particle_qd)
-        speed = velocity.norm(dim=1).max().item()
-        if not math.isfinite(speed) or not torch.isfinite(wp.to_torch(current.particle_q)).all():
-            raise FloatingPointError("Elastic bridge relaxation produced non-finite state")
-        # Numerical relaxation is initialization only; normal playback uses the authored material damping.
-        velocity.mul_(0.9)
-        quiet_steps = quiet_steps + 1 if speed < 1.0e-4 else 0
-        if quiet_steps >= 100:
-            break
-    else:
-        raise RuntimeError("Elastic bridge failed to settle within 4000 substeps; check geometry/material parameters")
-    equilibrium = current.particle_q.numpy()[indices].copy()
-    current.particle_qd.zero_()
-    # Releasing all artificial damping must not restart a visible oscillation.
-    drift = 0.0
-    for _ in range(math.ceil(0.5 / physics.physics_dt)):
-        current.clear_forces()
-        collision.collide(current, contacts)
-        solver.step(current, next_state, control, contacts, physics.physics_dt)
-        current, next_state = next_state, current
-        drift = max(drift, float(np.linalg.norm(current.particle_q.numpy()[indices] - equilibrium, axis=1).max()))
-        if not np.isfinite(current.particle_q.numpy()).all() or drift > 5.0e-5:
-            raise RuntimeError("Elastic bridge equilibrium drifts after relaxation; refusing an unsettled reset state")
-    report = {"relaxation_substeps": step + 1, "release_drift_m": drift,
-              "max_settling_displacement_m": float(np.linalg.norm(equilibrium - rest, axis=1).max())}
-    result = (rest, equilibrium, report)
-    _BRIDGE_EQUILIBRIA[key] = result
-    print(f"Elastic bridge ready: release drift={drift:.3g} m, relaxation steps={step + 1}", flush=True)
-    return result
 
 
 class _TransparentWaterMesh:
@@ -476,7 +417,7 @@ def add_elastic_bridge(builder, config):
         value = getattr(config, f"elastic_bridge_{name}")
         if not math.isfinite(value) or value <= 0:
             raise ValueError(f"elastic_bridge_{name} must be finite and positive")
-    for name in ("sag", "bend", "damping"):
+    for name in ("sag", "bend", "damping", "friction"):
         value = getattr(config, f"elastic_bridge_{name}")
         if not math.isfinite(value) or value < 0:
             raise ValueError(f"elastic_bridge_{name} must be finite and nonnegative")
@@ -506,11 +447,17 @@ def add_elastic_bridge(builder, config):
             faces.extend(((a, a + ny, a + ny + 1), (a, a + ny + 1, a + 1)))
     start = len(builder.particle_q)
     style3d.add_cloth_mesh(
-        builder, pos=wp.vec3(0.0), rot=wp.quat_identity(), vel=wp.vec3(0.0),
-        vertices=vertices.tolist(), indices=np.asarray(faces).ravel().tolist(),
-        density=config.elastic_bridge_density, tri_aniso_ke=wp.vec3(config.elastic_bridge_stretch),
-        edge_aniso_ke=wp.vec3(config.elastic_bridge_bend), tri_kd=config.elastic_bridge_damping,
-        edge_kd=0.001, particle_radius=0.003, label="microduck_elastic_bridge",
+        builder, pos=wp.vec3(0.0), rot=wp.quat_identity(), 
+        vel=wp.vec3(0.0),
+        vertices=vertices.tolist(), 
+        indices=np.asarray(faces).ravel().tolist(),
+        density=config.elastic_bridge_density, 
+        tri_aniso_ke=wp.vec3(config.elastic_bridge_stretch, config.elastic_bridge_stretch, 0.0),
+        edge_aniso_ke=wp.vec3(config.elastic_bridge_bend), 
+        tri_kd=config.elastic_bridge_damping,
+        edge_kd=0.08, 
+        particle_radius=0.003,
+        label="microduck_elastic_bridge",
     )
     # Pin every vertex across each end; the free sides must remain able to twist and sag.
     for row in (0, nx - 1):
@@ -552,6 +499,9 @@ class SceneTerrain:
     def finalize(self):
         if self.kind in ("trampoline", "cloth", "elastic_bridge"):
             model = self.env.model
+            if self.kind == "elastic_bridge":
+                # Soft-contact friction applies to the whole bridge scene, not only the feet.
+                model.soft_contact_mu = self.cfg["config"]["elastic_bridge_friction"]
             # Resolve after finalize: affine proxy insertion can reorder particles.
             indices = np.unique(model.tri_indices.numpy())
             self.cloth_indices = torch.as_tensor(indices, device=self.env.device, dtype=torch.long)
@@ -616,65 +566,15 @@ class SceneTerrain:
         )
         self.cfg["granular_particle_count"] = len(indices)
 
-    def initialize_rest_state(self):
-        if self.kind != "elastic_bridge" or self.env.solver is None:
-            return
-        rest, equilibrium, report = settled_bridge_state(SceneConfig(**self.cfg["config"]),
-                                                        self.env.physics, self.env.device)
-        self.reset_particle_q = wp.to_torch(self.env.model.particle_q).clone()
-        for world in range(self.env.num_envs):
-            selected = self.cloth_indices[self.cloth_worlds == world]
-            # Finalization may insert rigid proxies; never assume an authored particle offset survives.
-            if not np.allclose(self.reset_particle_q[selected].cpu().numpy(), rest, rtol=0, atol=1e-6):
-                raise ValueError("Bridge equilibrium particle ordering does not match the replicated template")
-            self.reset_particle_q[selected] = torch.as_tensor(equilibrium, device=self.env.device)
-        self.cfg["initial_equilibrium"] = dict(report)
-        self.bridge_sleeping = torch.ones(self.env.num_envs, dtype=torch.bool, device=self.env.device)
-        for state in self.env.states:
-            wp.to_torch(state.particle_q)[self.cloth_indices] = self.reset_particle_q[self.cloth_indices]
-            wp.to_torch(state.particle_qd)[self.cloth_indices] = 0
-        self.env._sync()
-
-    def wake_bridge_contacts(self, contacts):
-        """Wake per world before solving a robot contact, including its contact-generation margin."""
-        if not hasattr(self, "bridge_sleeping") or not self.bridge_sleeping.any():
-            return
-        count = int(wp.to_torch(contacts.soft_contact_count)[0])
-        indices = wp.to_torch(contacts.soft_contact_indices)[:count].long()
-        shapes = wp.to_torch(contacts.soft_contact_shape)[:count].long()
-        valid = (shapes >= 0) & (indices[:, 0] >= 0)
-        particles = indices[valid, 0]
-        bodies = wp.to_torch(self.env.model.shape_body)[shapes[valid]]
-        cloth = wp.to_torch(self.pad_particle)[particles] != 0
-        worlds = wp.to_torch(self.env.model.particle_world)[particles[cloth & (bodies >= 0)]].long().clamp_min(0)
-        self.bridge_sleeping[worlds] = False
-        # Manual perturbations must wake the membrane too, even with no robot contact.
-        state = self.env.states[0]
-        velocity = wp.to_torch(state.particle_qd)[self.cloth_indices]
-        force = wp.to_torch(state.particle_f)[self.cloth_indices]
-        disturbed = (velocity.abs().amax(-1) > 1.0e-5) | (force.abs().amax(-1) > 1.0e-5)
-        self.bridge_sleeping[self.cloth_worlds[disturbed]] = False
-
-    def hold_sleeping_bridges(self):
-        if not hasattr(self, "bridge_sleeping"):
-            return
-        selected = self.cloth_indices[self.bridge_sleeping[self.cloth_worlds]]
-        # Rigid solver residuals must not re-excite an unloaded, equilibrated membrane.
-        # Once touched, it stays fully dynamic until the next explicit/episode reset.
-        for state in self.env.states:
-            wp.to_torch(state.particle_q)[selected] = self.reset_particle_q[selected]
-            wp.to_torch(state.particle_qd)[selected] = 0
-
     def reset(self, ids):
         self.origins[ids] = 0
-        if hasattr(self, "bridge_sleeping"):
-            self.bridge_sleeping[ids] = True
         if self.kind in ("trampoline", "cloth", "elastic_bridge"):
             selected = self.cloth_indices[torch.isin(self.cloth_worlds, ids)]
+            reset_q = wp.to_torch(self.env.model.particle_q)
             for state in self.env.states:
-                reset_q = getattr(self, "reset_particle_q", wp.to_torch(self.env.model.particle_q))
                 wp.to_torch(state.particle_q)[selected] = reset_q[selected]
                 wp.to_torch(state.particle_qd)[selected] = 0
+                wp.to_torch(state.particle_f)[selected] = 0
             self.env._sync()
         if self.kind == "pool":
             model = self.env.model
@@ -702,7 +602,18 @@ class SceneTerrain:
             spawn[ids, :2] = 0
             config = self.cfg["config"]
             if self.kind == "elastic_bridge":
-                # Reset restores the relaxed membrane before sampling its actual support height.
+                distance = getattr(self, "playback_spawn_distance", None)
+                if distance is not None:
+                    # Playback starts upright on the inlet, including manual resets of recovery policies.
+                    spawn[ids] = self.env.initial_q[ids]
+                    spawn[ids, 0] = -config["elastic_bridge_length"] / 2 - distance
+                    spawn[ids, 1] = 0
+                    spawn[ids, 3:7] = spawn.new_tensor([0., 0., 0., 1.])
+                    self.env.task_logic.spawn_velocity[ids] = 0
+                    self.origins[ids, 2] = config["elastic_bridge_height"]
+                    spawn[ids, 2] += self.origins[ids, 2]
+                    return
+                # Reset restores the authored membrane before sampling its support height.
                 points = torch.zeros(self.env.num_envs, 1, 3, device=self.env.device)
                 self.origins[ids, 2] = self.surface_heights(points)[ids, 0]
             else:

@@ -46,7 +46,7 @@ class PhysicsConfig:
     physics_dt: float = 0.005
     decimation: int = 4
     nonlinear_iterations: int = 5
-    linear_iterations: int = 35
+    linear_iterations: int = 50
     joint_constraint_primal_iterations: int = 1
     affine_body_block_preconditioner: bool = False
     air_density: float = 1.225
@@ -414,6 +414,7 @@ class MicroDuckEnv:
             )
         else:
             self.solver = s3d.NewtonSolver(self.model)
+            self.solver.collision_pipeline = None
             self.physics.configure_synreal(self.solver)
             self.cfg["solver_settings"] = {
                 name: getattr(self.solver.config, name)
@@ -449,16 +450,6 @@ class MicroDuckEnv:
             self.solver.prepare_contacts(self.contacts)
         self.control = self.model.control()
         self.states = [self.model.state(), self.model.state()]
-        if self.scene_terrain:
-            self.terrain.initialize_rest_state()
-            if interactive and terrain == "elastic_bridge":
-                # HOME/preview snapshots must use the same center support as policy resets.
-                points = torch.zeros(num_envs, 1, 3, device=self.device)
-                center_height = self.terrain.surface_heights(points)[:, 0]
-                wp.to_torch(self.model.joint_q).reshape(num_envs, -1)[:, 2] += center_height - support_height
-                self._sync()
-                for state in self.states:
-                    wp.copy(state.joint_q, self.model.joint_q)
         self.qi = torch.tensor(qi, device=self.device)
         self.qdi = torch.tensor(qdi, device=self.device)
         self.home = torch.tensor(HOME, device=self.device)
@@ -736,12 +727,8 @@ class MicroDuckEnv:
                 self.collision.collide(self.states[0], self.contacts)
                 if self.mixed_terrain:
                     self.terrain.check_contacts()
-                if getattr(self.terrain, "kind", None) == "elastic_bridge":
-                    self.terrain.wake_bridge_contacts(self.contacts)
             self.solver.step(self.states[0], self.states[1], self.control, self.contacts, self.physics_dt)
             self.states.reverse()
-            if self.backend == "synreal" and getattr(self.terrain, "kind", None) == "elastic_bridge":
-                self.terrain.hold_sleeping_bridges()
             if guarded:
                 self.terrain.guard.after_substep(substep)
             if not self.interactive:

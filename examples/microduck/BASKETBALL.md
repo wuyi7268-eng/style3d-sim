@@ -58,6 +58,23 @@ ONNX内置归一化；显式维护每个环境独立的 `h/c [1,1,256]`，每个
 发布图固定batch=1，多环境推理逐环境执行，不将不同世界的记忆混用。
 `--pretrained` 仅回放，不是把上游 RSL-RL 5/BAM checkpoint 当成本地 RSL-RL 2 checkpoint续训。
 
+### 在 SynReal 微调上游 Actor
+
+`train --init-from-onnx logs/pretrained/microduck-basketball/policy.onnx` 可以从校验过的 b11 ONNX
+还原可训练的 LSTM/MLP Actor。ONNX 与 PyTorch 的 LSTM 门顺序不同，导入器显式转换，并测试连续推理及局部记忆重置一致性。
+Actor 归一化保持冻结；本地 Critic、优化器、探索标准差和辅助课程重新初始化。这是跨动力学微调，不是上游完整训练状态续训。
+训练后生成正常本地 `.pt`，后续用 `--checkpoint` 严格续训，继续冻结 Actor 归一化并保存初始化来源。
+
+```bash
+.venv/bin/python -m examples.microduck.basketball train --solver synreal \
+  --init-from-onnx logs/pretrained/microduck-basketball/policy.onnx \
+  --config .validation/microduck_basketball_finetune_20261111/config.json \
+  --num-envs 64 --iterations 5 --viewer null
+```
+
+该运行配置使用固定学习率 `2e-5`、初始探索标准差 `0.1`，每100轮保存，其他任务配置沿用默认值。
+辅助课程从最强等级开始逐步撤除；有辅助时站稳不能视为自由篮球平衡技能通过验收。
+
 ## 控制与观测
 
 默认窗口回放1500帧（30秒）；`--viewer null --num-frames 150 --report output.json` 可无窗口记录。

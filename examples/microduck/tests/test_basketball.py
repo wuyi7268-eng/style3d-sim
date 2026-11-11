@@ -100,6 +100,40 @@ def test_pretrained_rejects_wrong_file(tmp_path):
         pretrained_policy(path)
 
 
+def test_trainable_b11_actor_matches_release_through_memory_resets():
+    from rsl_rl.modules import ActorCriticRecurrent, EmpiricalNormalization
+
+    from examples.microduck.basketball_policy import CACHE, initialize_actor_from_onnx
+
+    if not CACHE.is_file():
+        pytest.skip("Published b11 cache required for real ONNX parity")
+    torch.manual_seed(42)
+    policy = ActorCriticRecurrent(61, 64, 14, actor_hidden_dims=[512, 256, 128], rnn_hidden_dim=256)
+    normalizer = EmpiricalNormalization(61)
+    runner = SimpleNamespace(alg=SimpleNamespace(policy=policy), obs_normalizer=normalizer)
+    critic_before = {k: v.clone() for k, v in policy.critic.state_dict().items()}
+    initialize_actor_from_onnx(runner, CACHE)
+    reference = BasketballOnnxPolicy(CACHE, count=2)
+    frozen = {k: v.clone() for k, v in normalizer.state_dict().items()}
+    normalizer.train()
+    with torch.no_grad():
+        for step in range(80):
+            if step == 31:
+                policy.reset(torch.tensor([True, False]))
+                reference.reset([0])
+            obs = torch.randn(2, 61) * normalizer.std + normalizer.mean
+            actual = policy.act_inference(normalizer(obs))
+            torch.testing.assert_close(actual, reference(obs), atol=2e-5, rtol=2e-5)
+    for key, value in frozen.items():
+        torch.testing.assert_close(normalizer.state_dict()[key], value, rtol=0, atol=0)
+    for key, value in critic_before.items():
+        torch.testing.assert_close(policy.critic.state_dict()[key], value, rtol=0, atol=0)
+    policy.reset(torch.ones(2, dtype=torch.bool))
+    policy.act_inference(normalizer(obs)).square().mean().backward()
+    assert policy.memory_a.rnn.weight_ih_l0.grad.abs().sum() > 0
+    assert policy.actor[0].weight.grad.abs().sum() > 0
+
+
 def test_onnx_memory_is_per_world_and_reset_is_selective(monkeypatch):
     import onnxruntime
 
