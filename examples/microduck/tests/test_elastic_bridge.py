@@ -16,6 +16,53 @@ from examples.microduck.scenes import SCENE_CONFIG, SceneTerrain, add_scene
 
 
 @pytest.mark.skipif(os.environ.get("MICRODUCK_GPU_TESTS") != "1", reason="Requires SynReal login and CUDA")
+def test_unloaded_bridge_motion_decays_at_checkpoint_timestep():
+    import style3d_sim as s3d
+    from examples.microduck.env import PhysicsConfig
+
+    # Freeze the light, fine mesh and 5 ms playback solve that exposed growing oscillations.
+    config = replace(SCENE_CONFIG, elastic_bridge_length=.8, elastic_bridge_width=.3,
+                     elastic_bridge_height=.65, elastic_bridge_sag=.04,
+                     elastic_bridge_cells_x=40, elastic_bridge_cells_y=10,
+                     elastic_bridge_density=.1, elastic_bridge_stretch=5000.,
+                     elastic_bridge_bend=0., elastic_bridge_damping=1.)
+    physics = PhysicsConfig(physics_dt=.005, decimation=4, nonlinear_iterations=5, linear_iterations=35,
+                            joint_constraint_primal_iterations=1, affine_body_block_preconditioner=False,
+                            air_density=1.225)
+    builder = s3d.ModelBuilder()
+    add_scene(builder, "elastic_bridge", config)
+    model = builder.finalize(device="cuda:0")
+    model.set_gravity((0, 0, -9.81))
+    solver = s3d.NewtonSolver(model)
+    physics.configure_synreal(solver)
+    collision = newton.CollisionPipeline(model, enable_rigid_soft_full_surface_contact=True,
+                                         soft_contact_margin=.01, soft_contact_max=8192)
+    contacts = collision.contacts()
+    solver.prepare_contacts(contacts)
+    state, next_state = model.state(), model.state()
+    control = model.control()
+    reference = model.particle_q.numpy()
+    fixed = model.particle_mass.numpy() == 0
+    tail = []
+    max_tail_speed = 0.
+    for step in range(600):
+        state.clear_forces()
+        collision.collide(state, contacts)
+        solver.step(state, next_state, control, contacts, physics.physics_dt)
+        state, next_state = next_state, state
+        positions = state.particle_q.numpy()
+        assert np.isfinite(positions).all()
+        np.testing.assert_array_equal(positions[fixed], reference[fixed])
+        if step >= 400:
+            tail.append(positions)
+            max_tail_speed = max(max_tail_speed, float(np.linalg.norm(state.particle_qd.numpy(), axis=-1).max()))
+    # Natural gravity response must remain enabled, but unloaded motion must dissipate.
+    assert np.linalg.norm(positions - reference, axis=-1).max() > .001
+    assert np.linalg.norm(np.asarray(tail) - tail[0], axis=-1).max() < .001
+    assert max_tail_speed < .01
+
+
+@pytest.mark.skipif(os.environ.get("MICRODUCK_GPU_TESTS") != "1", reason="Requires SynReal login and CUDA")
 @pytest.mark.parametrize("interactive,controller", [(False, "policy"), (True, "home"), (True, "policy")])
 def test_bridge_starts_and_resets_without_presimulation(interactive, controller):
     import style3d_sim as s3d
@@ -77,7 +124,8 @@ def test_only_short_ends_are_fixed_and_span_has_no_rigid_support():
 
 
 @pytest.mark.parametrize("field,value", [("cells_x", 1), ("cells_y", True), ("width", 0.05), ("density", float("nan")),
-                                         ("damping", -1), ("sag", 1.0), ("approach_width", .1),
+                                         ("damping", -1), ("bend_damping", -1), ("bend_damping", float("nan")),
+                                         ("bend_damping", float("inf")), ("sag", 1.0), ("approach_width", .1),
                                          ("approach_length", .1), ("spawn_distance", .75),
                                          ("approach_width", float("nan")), ("approach_length", float("inf"))])
 def test_invalid_bridge_parameters(field, value):

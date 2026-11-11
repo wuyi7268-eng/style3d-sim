@@ -69,6 +69,8 @@ class SceneConfig:
     elastic_bridge_stretch: float = 5000.0
     elastic_bridge_bend: float = 0.0
     elastic_bridge_damping: float = 1
+    # Large edge damping destabilizes this lightweight mesh at millisecond timesteps.
+    elastic_bridge_bend_damping: float = 0.0
     elastic_bridge_friction: float = 1
     elastic_bridge_approach_length: float = 0.8
     elastic_bridge_approach_width: float = 0.8
@@ -417,7 +419,7 @@ def add_elastic_bridge(builder, config):
         value = getattr(config, f"elastic_bridge_{name}")
         if not math.isfinite(value) or value <= 0:
             raise ValueError(f"elastic_bridge_{name} must be finite and positive")
-    for name in ("sag", "bend", "damping", "friction"):
+    for name in ("sag", "bend", "damping", "bend_damping", "friction"):
         value = getattr(config, f"elastic_bridge_{name}")
         if not math.isfinite(value) or value < 0:
             raise ValueError(f"elastic_bridge_{name} must be finite and nonnegative")
@@ -455,7 +457,7 @@ def add_elastic_bridge(builder, config):
         tri_aniso_ke=wp.vec3(config.elastic_bridge_stretch, config.elastic_bridge_stretch, 0.0),
         edge_aniso_ke=wp.vec3(config.elastic_bridge_bend), 
         tri_kd=config.elastic_bridge_damping,
-        edge_kd=0.08, 
+        edge_kd=config.elastic_bridge_bend_damping,
         particle_radius=0.003,
         label="microduck_elastic_bridge",
     )
