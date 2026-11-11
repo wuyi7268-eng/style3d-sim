@@ -45,6 +45,37 @@ def test_scene_builder_authors_expected_support(kind):
         assert not (flags[0] & int(newton.ParticleFlags.ACTIVE))
         assert not (flags[-1] & int(newton.ParticleFlags.ACTIVE))
         assert metadata["support"] == "sagging_cloth_between_fixed_ends"
+    elif kind == "cloth":
+        n = SCENE_CONFIG.cloth_resolution
+        assert len(builder.particle_q) == n * n
+        flags = np.asarray(builder.particle_flags).reshape(n, n)
+        active = (flags & int(newton.ParticleFlags.ACTIVE)) != 0
+        assert not active[0, 0] and not active[0, -1]
+        assert not active[-1, 0] and not active[-1, -1]
+        assert active.sum() == n * n - 4
+        assert np.asarray(builder.particle_mass).reshape(n, n)[~active].sum() == 0
+        assert metadata["support"] == "sagging_cloth_fixed_at_four_corners"
+        assert len(builder.shape_body) == 8
+    elif kind == "trampoline":
+        n = SCENE_CONFIG.trampoline_resolution
+        assert len(builder.particle_q) == n * n
+        flags = np.asarray(builder.particle_flags).reshape(n, n)
+        active = (flags & int(newton.ParticleFlags.ACTIVE)) != 0
+        assert active[1:-1, 1:-1].all()
+        assert active.sum() == (n - 2)**2
+        assert np.all(np.asarray(builder.particle_mass).reshape(n, n)[~active] == 0)
+        assert len(builder.shape_body) == 53
+        radii = np.linalg.norm(np.asarray(builder.particle_q)[:, :2], axis=1).reshape(n, n)
+        radius = min(SCENE_CONFIG.trampoline_length, SCENE_CONFIG.trampoline_width) / 2
+        np.testing.assert_allclose(radii[~active], radius, atol=1e-7)
+        assert (radii[active] < radius).all()
+        triangles = np.asarray(builder.particle_q)[np.asarray(builder.tri_indices)]
+        assert (np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])[:, 2] > 0).all()
+        assert metadata["shape"] == "circle"
+        assert metadata["support"] == "elastic_cloth_fixed_perimeter"
+    elif kind == "elastic_bridge":
+        assert metadata["support"] == "elastic_strip_fixed_short_ends"
+        assert len(builder.particle_q) == (SCENE_CONFIG.elastic_bridge_cells_x + 1) * (SCENE_CONFIG.elastic_bridge_cells_y + 1)
     elif kind == "sand":
         assert metadata["grain_count_per_world"] == len(builder.particle_q)
         assert SCENE_CONFIG.sand_spacing == pytest.approx(0.002)
@@ -68,7 +99,7 @@ def test_scene_selection_is_available_for_synreal_training_and_playback(kind):
     train, _, _ = setup("train", ["--solver", "synreal", "--terrain", kind])
     assert train.terrain == kind
     assert train.environment_profile == kind
-    if kind in ("sand", "pool"):
+    if kind in ("sand", "pool", "cloth", "trampoline", "elastic_bridge"):
         assert train.num_envs == 1
     with pytest.raises(SystemExit):
         setup("play", ["--solver", "synreal", "--terrain", kind])
@@ -160,16 +191,17 @@ def test_sand_with_robot_excludes_affine_proxies(world_count):
     os.environ.get("MICRODUCK_GPU_TESTS") != "1" or not torch.cuda.is_available(),
     reason="Hammock mesh SDF construction requires CUDA; enable MICRODUCK_GPU_TESTS=1",
 )
-def test_hammock_environment_generates_triangle_interior_contacts():
+@pytest.mark.parametrize("kind, root_z", [("hammock", 1.07), ("cloth", 1.03), ("trampoline", 0.50)])
+def test_hammock_environment_generates_triangle_interior_contacts(kind, root_z):
     import warp as wp
     from examples.microduck.env import MicroDuckEnv
 
-    env = MicroDuckEnv(solver="synreal", num_envs=1, device="cuda:0", terrain="hammock",
+    env = MicroDuckEnv(solver="synreal", num_envs=1, device="cuda:0", terrain=kind,
                        interactive=True, controller="home", preview=True, randomize_foot_friction=False)
     try:
         assert env.cfg["collision_options"]["enable_rigid_soft_full_surface_contact"]
         q = env.model.joint_q.numpy()
-        q[2] = 1.07
+        q[2] = root_z
         env.model.joint_q.assign(q)
         newton.eval_fk(env.model, env.model.joint_q, env.model.joint_qd, env.states[0])
         env.collision.collide(env.states[0], env.contacts)

@@ -178,13 +178,18 @@ def test_mixed_playback_disables_interval_events_but_training_keeps_them():
             return real_step(*args, **kwargs)
 
         env.mixed_terrain = True
+        env.max_episode_length = 1
+        resets = env.total_resets
         with patch.object(env, "step", side_effect=dispatch):
             env.step_playback(actions)
         assert calls == []
+        assert env.total_resets == resets
         env.step_playback(actions)
         assert calls == []
+        assert env.total_resets == resets
         env.step(actions)
         assert calls == ["push"]
+        assert env.total_resets == resets + 1
     finally:
         env.close()
 

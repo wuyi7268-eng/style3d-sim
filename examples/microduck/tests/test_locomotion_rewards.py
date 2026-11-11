@@ -19,9 +19,44 @@ from examples.microduck.reward_functions import (
     commanded_foot_placement_reward,
     feet_surface_slip,
     head_angular_velocity_penalty,
+    track_yaw_rate_fine,
 )
 from examples.microduck.sensors import ContactSensor, _soft_contact_flags
 from examples.microduck.velocity_rewards import feet_slip
+
+
+def test_velocity_fine_yaw_tracking_prices_drift_without_blocking_commanded_turns():
+    rewards = json.loads(SNAPSHOT.read_text())["tasks"]["velocity"]["rewards"]
+    term = rewards["track_yaw_fine"]
+    command = torch.tensor([[0.2, 0., 0.], [0.2, 0., 0.], [0., 0., 0.8], [0., 0., -0.8]])
+    angular = torch.tensor([[0., 0., 0.], [0., 0., 0.1], [1., 2., 0.8], [-1., -2., -0.8]])
+    recipe = SimpleNamespace(
+        scene={"robot": SimpleNamespace(data=SimpleNamespace(root_link_ang_vel_b=angular))},
+        command_manager=SimpleNamespace(get_command=lambda name: command),
+    )
+    fine = track_yaw_rate_fine(recipe, **term["params"]) * term["weight"]
+    # A small sustained error must matter, while matching either turn direction earns full credit.
+    assert (fine[0] - fine[1]).item() > 0.075
+    torch.testing.assert_close(fine[[0, 2, 3]], torch.full((3,), term["weight"]))
+    coarse = rewards["track_angular_velocity"]
+    assert coarse["weight"] == 2.0
+    assert coarse["params"]["std"] == pytest.approx(0.5 ** 0.5)
+
+
+@pytest.mark.parametrize("task", ["velocity", "velstand"])
+def test_velocity_fine_yaw_tracking_reaches_environment_reward_and_logs(task):
+    from examples.microduck.env import MicroDuckEnv
+
+    env = MicroDuckEnv(solver="mujoco", num_envs=1, device="cpu", task=task)
+    try:
+        assert env.official.supported["track_yaw_fine"] == "track_yaw_rate_fine"
+        _, reward, _, extras = env.step(torch.zeros(1, 14))
+        assert torch.isfinite(reward).all()
+        value = extras["log"]["Task/track_yaw_fine"]
+        assert 0 <= value <= env.official.spec["rewards"]["track_yaw_fine"]["weight"]
+        assert env.cfg["official_alignment"]["local_rewards"]["track_yaw_fine"]["local"]
+    finally:
+        env.close()
 
 
 def test_head_stability_uses_world_motion_and_gates_recovery_commands_and_yaw():
@@ -333,8 +368,9 @@ def test_local_reward_export_and_soft_sensor_partial_reset():
     rewards = snapshot["tasks"]["velocity"]["rewards"]
     for name in ("foot_slip", "command_progress", "head_angular_velocity"):
         assert rewards[name]["local"] and rewards[name]["weight"] < 0
-    for name in ("foot_clearance", "foot_swing_height", "commanded_foot_placement"):
+    for name in ("foot_clearance", "foot_swing_height"):
         assert rewards[name]["local"] and rewards[name]["weight"] > 0
+    assert rewards["commanded_foot_placement"]["local"] and rewards["commanded_foot_placement"]["weight"] == 0
     assert rewards["foot_slip"]["weight"] == -0.1
     for task_name in ("velocity", "velstand", "velocity_rough", "velstand_rough"):
         task_rewards = snapshot["tasks"][task_name]["rewards"]
@@ -353,8 +389,9 @@ def test_local_reward_export_and_soft_sensor_partial_reset():
         assert exported["tasks"]["velocity"]["rewards"][name] == rewards[name]
     selected = {name: spec for name, spec in snapshot["tasks"].items() if name.split("_")[0] in ("velocity", "velstand")}
     assert len(selected) == 8
-    for spec in selected.values():
-        assert spec["rewards"]["head_angular_velocity"] == rewards["head_angular_velocity"]
+    for task, spec in selected.items():
+        expected = dict(rewards["head_angular_velocity"], weight=-0.025 if task in ("velocity", "velstand") else -0.05)
+        assert spec["rewards"]["head_angular_velocity"] == expected
     sensor = ContactSensor(2, 2, "cpu")
     sensor.data.soft_found = torch.ones(2, 2)
     sensor.data.soft_slip_squared_sum = torch.ones(2, 2)
@@ -534,10 +571,10 @@ def test_cadence_config_scope_and_real_recipe_reset_and_dispatch():
     assert len(selected) == 8
     for name, spec in tasks.items():
         rewards = spec["rewards"]
-        assert ("foot_swing_progress" in rewards) == (name == "velocity")
-        if name == "velocity":
+        assert ("foot_swing_progress" in rewards) == (name in ("velocity", "velstand"))
+        if name in ("velocity", "velstand"):
             progress = rewards["foot_swing_progress"]
-            assert progress["local"] and progress["weight"] > 0
+            assert progress["local"] and progress["weight"] == 0
             assert progress["params"]["cadence"] == rewards["gait_cadence"]["params"]["cadence"]
         if name not in selected:
             assert "gait_cadence" not in rewards and "gait_overdue" not in rewards
@@ -546,25 +583,31 @@ def test_cadence_config_scope_and_real_recipe_reset_and_dispatch():
         for term in ("gait_cadence", "gait_overdue", "air_time", "foot_clearance", "foot_swing_height",
                      "commanded_foot_placement"):
             assert rewards[term]["local"] and rewards[term]["params"]["cadence"] == cadence
-        assert rewards["gait_cadence"]["weight"] > 0 > rewards["gait_overdue"]["weight"]
+        if name == "velocity":
+            assert rewards["gait_cadence"]["weight"] == rewards["gait_overdue"]["weight"] == 0
+        else:
+            assert rewards["gait_cadence"]["weight"] > 0 > rewards["gait_overdue"]["weight"]
     for task in ("velocity", "velstand"):
         env = MicroDuckEnv(task=task, solver="mujoco", device="cpu", num_envs=1)
         try:
             _, reward, _, extras = env.step(torch.zeros_like(env.actions))
             assert torch.isfinite(reward).all()
-            assert extras["log"]["Task/gait_cadence"] >= 0
-            assert extras["log"]["Task/gait_overdue"] <= 0
-            state = env.official._gait_cadence
-            state.interval.fill_(0.25)
+            if task == "velstand":
+                assert extras["log"]["Task/gait_cadence"] >= 0
+                assert extras["log"]["Task/gait_overdue"] <= 0
+            else:
+                assert "Task/gait_cadence" not in extras["log"]
+                assert "Task/gait_overdue" not in extras["log"]
             if task == "velocity":
-                assert extras["log"]["Task/foot_swing_progress"] >= 0
-                assert "Metrics/foot_swing_score_left" in extras["log"]
-                swing_state = env.official._foot_swing_progress
-                swing_state.score.fill_(1)
+                assert "Task/foot_swing_progress" not in extras["log"]
+                assert "Metrics/foot_swing_score_left" not in extras["log"]
+                assert not hasattr(env.official, "_foot_swing_progress")
+            else:
+                state = env.official._gait_cadence
+                state.interval.fill_(0.25)
             env._reset(torch.tensor([0]))
-            assert not state.interval.any() and (state.last_foot == -1).all()
-            if task == "velocity":
-                assert not swing_state.score.any()
+            if task == "velstand":
+                assert not state.interval.any() and (state.last_foot == -1).all()
         finally:
             env.close()
 

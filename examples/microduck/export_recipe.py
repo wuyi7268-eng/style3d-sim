@@ -34,6 +34,8 @@ def preserve_local_terms(exported, previous):
     # Preserve intentional local rewards, curricula, and command sampling when refreshing upstream data.
     for task, spec in exported["tasks"].items():
         old = previous.get("tasks", {}).get(task, {})
+        if "terrain_overrides" in old:
+            spec["terrain_overrides"] = old["terrain_overrides"]
         for section in ("rewards", "curricula", "commands"):
             for name, term in old.get(section, {}).items():
                 if term.get("local") is True:

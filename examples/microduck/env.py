@@ -46,7 +46,7 @@ class PhysicsConfig:
     physics_dt: float = 0.005
     decimation: int = 4
     nonlinear_iterations: int = 5
-    linear_iterations: int = 50
+    linear_iterations: int = 35
     joint_constraint_primal_iterations: int = 1
     affine_body_block_preconditioner: bool = False
     air_density: float = 1.225
@@ -108,11 +108,11 @@ class PhysicsConfig:
 # Geometry construction lives in scenes.py; edit experiment materials here.
 PAD_CONFIG = SoftPadConfig(
     # Cells per meter keep mesh spacing fixed when size changes (about 2.67 cm XY, 2 cm Z).
-    size=(1.2, 1.2, 0.12), cells_per_meter=(35, 35, 4.0), base_z=0,
+    size=(1.2, 1.2, 0.12), cells_per_meter=(30, 30, 4.0), base_z=0,
     # Native material damping approximates slow-recovery foam without permanent deformation.
     # Shear stiffness supports foot loads; damping slows both indentation and elastic recovery.
-    density=80.0, shear_modulus=60.0, lame_lambda=7000.0,
-    damping=35.0, particle_radius=0.0015, fix_bottom=True,
+    density=80.0, shear_modulus=50.0, lame_lambda=4500.0,
+    damping=25.0, particle_radius=0.0015, fix_bottom=True,
     # At 5/50, the previous 50 kN/m contact penalty inverted surface tetrahedra
     # under foot impact. Lower contact stiffness without hardening the pad itself.
     contact_stiffness=5000.0
@@ -171,9 +171,11 @@ ENVIRONMENT_CONFIGS = {
     ),
 }
 for _scene_kind in SCENE_KINDS:
-    _scene_num_envs = 1 if _scene_kind in ("sand", "pool") else 1024
+    _scene_num_envs = 1 if _scene_kind in ("sand", "pool", "cloth", "trampoline", "elastic_bridge") else 1024
     ENVIRONMENT_CONFIGS[_scene_kind] = EnvironmentConfig(
-        name=_scene_kind, terrain=_scene_kind, num_envs=_scene_num_envs
+        name=_scene_kind, terrain=_scene_kind, num_envs=_scene_num_envs,
+        physics=(PhysicsConfig(physics_dt=0.0025, decimation=8, joint_constraint_primal_iterations=4)
+                 if _scene_kind == "elastic_bridge" else PhysicsConfig()),
     )
 
 
@@ -319,7 +321,7 @@ class MicroDuckEnv:
             builder_type = s3d.ModelBuilder
         # This is intentionally configurable for playback diagnostics. Training
         # keeps the existing collision-free articulation unless explicitly changed.
-        robot, qi, qdi = build_robot(builder_type, enable_self_collisions=enable_self_collisions, task=task)
+        robot, qi, qdi = self.build_robot(builder_type, enable_self_collisions=enable_self_collisions, task=task)
         self.robot_mass = float(sum(robot.body_mass))
         self.root = next(i for i, name in enumerate(robot.body_label) if name.rsplit("/", 1)[-1] == "trunk_base")
         self.task_logic = TaskLogic(task, robot)
@@ -338,12 +340,21 @@ class MicroDuckEnv:
                     add_inset_floor(robot, pad_config, has_pad=True)
         elif terrain != "default":
             scene_metadata = add_scene(robot, terrain)
+            if interactive and terrain in ("cloth", "trampoline", "elastic_bridge"):
+                support_height = (1.15 - scene_metadata["config"]["cloth_sag"] if terrain == "cloth"
+                                  else scene_metadata["config"]["trampoline_height"])
+                if terrain == "elastic_bridge":
+                    config = scene_metadata["config"]
+                    support_height = config["elastic_bridge_height"] - config["elastic_bridge_sag"]
+                    robot.joint_q[0] = 0.0
+                    robot.joint_q[1] = 0.0
+                robot.joint_q[2] += support_height + clearance
         # Preserve the standalone topology for interactive diagnostics. Batched RL
         # replicates the same template, including a single-world training run.
         builder = robot if interactive else builder_type(up_axis=newton.Axis.Z)
         if not interactive:
             newton.solvers.SolverMuJoCo.register_custom_attributes(builder)
-            if terrain == "hammock":
+            if terrain in ("hammock", "cloth", "trampoline", "elastic_bridge"):
                 newton.solvers.SolverStyle3D.register_custom_attributes(builder)
             if self.mixed_terrain and pad_sampling == "fixed_groups_center":
                 # Keep robot/body/joint ordering identical while omitting all soft
@@ -411,7 +422,7 @@ class MicroDuckEnv:
             }
         self.cfg["inertia_integrator"] = "implicit_euler" if solver == "synreal" else "implicitfast"
         collision_options = {}
-        if self.mixed_terrain or terrain == "hammock":
+        if self.mixed_terrain or terrain in ("hammock", "cloth", "trampoline", "elastic_bridge"):
             # Keep the viewer's arbitrary-size pad budget and the replicated
             # training budget; capacity is storage, not a different contact law.
             # Refined pads produce ground contacts across their full surface; a fixed
@@ -438,6 +449,16 @@ class MicroDuckEnv:
             self.solver.prepare_contacts(self.contacts)
         self.control = self.model.control()
         self.states = [self.model.state(), self.model.state()]
+        if self.scene_terrain:
+            self.terrain.initialize_rest_state()
+            if interactive and terrain == "elastic_bridge":
+                # HOME/preview snapshots must use the same center support as policy resets.
+                points = torch.zeros(num_envs, 1, 3, device=self.device)
+                center_height = self.terrain.surface_heights(points)[:, 0]
+                wp.to_torch(self.model.joint_q).reshape(num_envs, -1)[:, 2] += center_height - support_height
+                self._sync()
+                for state in self.states:
+                    wp.copy(state.joint_q, self.model.joint_q)
         self.qi = torch.tensor(qi, device=self.device)
         self.qdi = torch.tensor(qdi, device=self.device)
         self.home = torch.tensor(HOME, device=self.device)
@@ -470,9 +491,8 @@ class MicroDuckEnv:
                 self.terrain.spawn_on_pad[:] = spawn == "pad"
                 self.terrain.origins[:, 2] = pad_config.top_z if spawn == "pad" else 0.0
         if not interactive or controller == "policy":
-            from .recipe import OfficialRecipe
-
-            self.official = OfficialRecipe(self, robot)
+            self.official = self.create_recipe(robot)
+        if self.official is not None:
             if interactive:
                 self.official.observations.spec["actor"]["enable_corruption"] = False
             self.cfg["task_recipe"] = recipe
@@ -487,6 +507,15 @@ class MicroDuckEnv:
                 spacing = (pad_config.size[0] + 2.0, pad_config.size[1] + 1.0, 0.0)
             elif terrain == "hammock":
                 spacing = (2.2, 1.3, 0.0)
+            elif terrain == "cloth":
+                config = self.terrain.cfg["config"]
+                spacing = (config["cloth_length"] + 0.8, config["cloth_width"] + 0.8, 0.0)
+            elif terrain in ("trampoline", "elastic_bridge"):
+                config = self.terrain.cfg["config"]
+                spacing = (config[f"{terrain}_length"] + 0.8, config[f"{terrain}_width"] + 0.8, 0.0)
+                if terrain == "elastic_bridge":
+                    spacing = (spacing[0] + config["elastic_bridge_approach_length"],
+                               max(config["elastic_bridge_width"], config["elastic_bridge_approach_width"]) + 0.8, 0.0)
             elif terrain == "sand":
                 spacing = (1.8, 1.6, 0.0)
             elif terrain == "pool":
@@ -502,6 +531,18 @@ class MicroDuckEnv:
             viewer.set_world_offsets(spacing)
             if self.scene_terrain and not self.mixed_terrain:
                 self.terrain.configure_viewer(viewer)
+
+    @staticmethod
+    def build_robot(builder_type, **kwargs):
+        return build_robot(builder_type, **kwargs)
+
+    def create_recipe(self, robot):
+        from .recipe import OfficialRecipe
+
+        return OfficialRecipe(self, robot)
+
+    def apply_task_forces(self):
+        """Optional physical mechanism forces, evaluated after clearing each substep."""
 
     def _sync(self):
         # Torch and Warp may use different CUDA streams; synchronize at ownership boundaries.
@@ -577,10 +618,13 @@ class MicroDuckEnv:
                 state.clear_forces()
                 if self.solver is not None:
                     self.solver.sync_affine_body_state(state)
+            if getattr(self.terrain, "kind", None) == "elastic_bridge":
+                self.terrain.reset(torch.arange(self.num_envs, device=self.device))
             wp.copy(self.control.joint_target_q, self.initial_targets)
             self.actions.zero_()
             self.episode_length_buf.zero_()
-            self.terrain.minimum_volume.fill_(1.0)
+            if self.mixed_terrain:
+                self.terrain.minimum_volume.fill_(1.0)
             self.sim_time, self.steps = 0.0, 0
             if self.official is not None:
                 self.official.observations.reset(torch.arange(self.num_envs, device=self.device))
@@ -626,7 +670,7 @@ class MicroDuckEnv:
 
     @torch.no_grad()
     def step_playback(self, actions):
-        """Use shared physics while preserving the fast rigid-playback episode contract."""
+        """Advance playback continuously; only an explicit reset starts a new episode."""
         if self.interactive:
             self.step(actions)
             return self.get_observations()[0]
@@ -634,7 +678,7 @@ class MicroDuckEnv:
             # Mixed terrain needs sensors and deformation guards, but visual
             # evaluation must not silently inherit training-only interval pushes.
             # Manual viewer forces still need to reach each physics substep.
-            return self.step(actions, apply_interval_events=False, apply_viewer_forces=True)[0]
+            return self.step(actions, apply_interval_events=False, apply_viewer_forces=True, auto_reset=False)[0]
         self.advance_physics(actions, apply_viewer_forces=True)
         q, qd, pose, linear, angular, gravity = self._kinematics()
         if not all(torch.isfinite(x).all() for x in (q, qd, pose, linear, angular)):
@@ -642,18 +686,9 @@ class MicroDuckEnv:
         self.episode_length_buf += 1
         self.official.common_step_counter += 1
         self.official.robot.data = SimpleNamespace(root_link_pos_w=pose[:, :3], root_link_quat_w=pose[:, [6, 3, 4, 5]])
-        from .events import termination
         from .play import PolicyPlayback
 
-        failure = termination(self.official, gravity) if self.reset_on_fall else torch.zeros_like(
-            self.episode_length_buf, dtype=torch.bool
-        )
-        done = failure | (self.episode_length_buf >= self.max_episode_length)
         self.sim_time += self.step_dt
-        ids = done.nonzero().flatten()
-        if len(ids):
-            self.total_resets += len(ids)
-            self._reset(ids)
         if self.viewer is None or self.family not in ("velocity", "velstand"):
             self.official.update_commands()
         obs = PolicyPlayback(self).observe()
@@ -694,14 +729,19 @@ class MicroDuckEnv:
             if actions is not None:
                 torque = self.apply_policy_targets()
             self.states[0].clear_forces()
+            self.apply_task_forces()
             if apply_viewer_forces and self.viewer is not None:
                 self.viewer.apply_forces(self.states[0])
             if self.backend == "synreal":
                 self.collision.collide(self.states[0], self.contacts)
                 if self.mixed_terrain:
                     self.terrain.check_contacts()
+                if getattr(self.terrain, "kind", None) == "elastic_bridge":
+                    self.terrain.wake_bridge_contacts(self.contacts)
             self.solver.step(self.states[0], self.states[1], self.control, self.contacts, self.physics_dt)
             self.states.reverse()
+            if self.backend == "synreal" and getattr(self.terrain, "kind", None) == "elastic_bridge":
+                self.terrain.hold_sleeping_bridges()
             if guarded:
                 self.terrain.guard.after_substep(substep)
             if not self.interactive:
@@ -720,7 +760,7 @@ class MicroDuckEnv:
         return torque
 
     @torch.no_grad()
-    def step(self, actions=None, *, apply_interval_events=True, apply_viewer_forces=False):
+    def step(self, actions=None, *, apply_interval_events=True, apply_viewer_forces=False, auto_reset=True):
         if self.preview:
             return None
         if self.interactive:
@@ -757,16 +797,23 @@ class MicroDuckEnv:
             if self.family == "velocity" and self.reset_on_fall:
                 failure |= pose[:, 2] - support_height < 0.065
             failure, timeout = self.terrain.guard.terminations(failure, timeout)
+        if getattr(self.terrain, "kind", None) == "elastic_bridge" and self.family == "velocity":
+            # Leaving a free side is a fall, not a bootstrapped end-of-bridge timeout.
+            side_fall = self.terrain.side_out_of_bounds(pose)
+            failure |= side_fall | (pose[:, 2] - support_height < 0.065)
+            timeout &= ~failure
         done = failure | timeout
         terrain_log = self.terrain.log(reward, failure, timeout, linear, gravity, self.commands) if self.mixed_terrain else {}
         self.sim_time += self.step_dt
         # Record pre-reset geometry so simulation diagnostics cannot hide a fall behind auto-reset.
         physics = {"min_trunk_z": pose[:, 2].min().item(), "min_upright_cos": (-gravity[:, 2]).min().item()}
         ids = done.nonzero().flatten()
-        if len(ids):
+        if auto_reset and len(ids):
             self.total_resets += len(ids)
             self._reset(ids)
-        if self.viewer is None or self.family not in ("velocity", "velstand"):
+        # A cloth training viewer must not freeze command timers or the stop/start curriculum.
+        if (self.viewer is None or self.family not in ("velocity", "velstand")
+                or (auto_reset and getattr(self.terrain, "kind", None) in ("cloth", "elastic_bridge"))):
             self.official.update_commands()
         if apply_interval_events:
             self.official.pushes.apply()

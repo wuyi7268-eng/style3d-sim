@@ -78,11 +78,23 @@ def setup(mode, argv=None):
         help="sample one foot-ground friction value per environment at startup",
     )
     if mode == "play":
+        parser.add_argument("--heading-hold", action="store_true",
+                            help="steer a single Velocity checkpoint along its initial heading using pose feedback")
+        parser.add_argument("--heading-max-yaw", type=float, default=1.0,
+                            help="heading-hold yaw limit in rad/s; values above 1 exceed the saved training command range")
+        parser.add_argument("--adaptive-forward", action="store_true",
+                            help="with heading hold, adjust forward/yaw policy commands using measured progress")
+        parser.add_argument("--target-forward-speed", type=float, default=0.10,
+                            help="desired measured forward speed for adaptive playback, m/s; not a tracking guarantee")
+        parser.add_argument("--record-dir", type=Path,
+                            help="save this checkpoint replay as animated USD for offline Blender rendering")
+        parser.add_argument("--record-until-pad-edge", action="store_true",
+                            help="stop recording when the robot root reaches the soft-pad boundary")
         parser.add_argument(
             "--fall-reset",
             action=argparse.BooleanOptionalAction,
             default=False,
-            help="automatically reset worlds after a fall during checkpoint playback (default: disabled)",
+            help="legacy option, ignored: playback only resets manually with R",
         )
         parser.add_argument("--policy", choices=["walk"], help="official walk.onnx policy; default when no checkpoint is given")
         parser.add_argument(
@@ -243,7 +255,9 @@ def setup(mode, argv=None):
                 changed |= (json.dumps(asdict(SoftPadConfig(**args.pad_config)), sort_keys=True)
                             != json.dumps(asdict(SoftPadConfig.from_checkpoint(metadata["terrain"])), sort_keys=True))
             elif saved_terrain in SCENE_KINDS:
-                changed |= metadata.get("terrain", {}).get("config") != asdict(SCENE_CONFIG)
+                # JSON saves tuples as lists; compare serialized values without relaxing material checks.
+                changed |= (json.dumps(metadata.get("terrain", {}).get("config"), sort_keys=True)
+                            != json.dumps(asdict(SCENE_CONFIG), sort_keys=True))
             if changed:
                 parser.error("Resume environment differs from the checkpoint. Use --use-checkpoint-environment "
                              "for saved dynamics, or --init-from for a changed environment.")
@@ -292,6 +306,10 @@ def setup(mode, argv=None):
     if (mode == "train" and args.diagnostic_no_exploration
             and (not (args.init_from or args.resume) or args.task != "velocity")):
         parser.error("--diagnostic-no-exploration requires a velocity checkpoint via --init-from or --resume")
+    if mode == "play":
+        if args.fall_reset:
+            print("--fall-reset is ignored: playback resets only when R is pressed.", flush=True)
+        args.fall_reset = False
     return args, training_config, play_cfg
 
 
@@ -329,12 +347,12 @@ def create_env(args):
         pad_config=getattr(args, "pad_config", None),
         pad_sampling=getattr(args, "pad_sampling", None),
         physics=getattr(args, "physics", None),
-        reset_on_fall=getattr(args, "fall_reset", True),
+        reset_on_fall=args.mode != "play",
     )
     env.cfg["environment_profile"] = args.environment_profile
     env.cfg["environment_source"] = args.environment_source
     if args.mode == "play":
-        print(f"Playback fall reset: {'enabled' if args.fall_reset else 'disabled'}", flush=True)
+        print("Playback resets: manual only (R resets all environments; --fall-reset is ignored)", flush=True)
     from .observations import configure_policy_observations
 
     configure_policy_observations(env, getattr(args, "policy_variant", "standard"))

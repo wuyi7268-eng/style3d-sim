@@ -1,0 +1,19 @@
+{
+  "repository": "https://github.com/Vottivott/microduck-playground",
+  "revision": "c5fcc50219fef01ac9931d0079c583ccbb29b689",
+  "model": "https://huggingface.co/HannesVonEssen/microduck-swing",
+  "sha256": {
+    "swing_seat_retained.stl": "8645d6bf673808627f4c5f54decac3a2873b5196eb4010e5987fc5b4e2f9cdb2",
+    "swing_retention_strap.stl": "80d333c8eac2ab22ac6337fbb0b0735aa1056e8b36f78311f979c2df3d00a1f6",
+    "swing_retention_buckle.stl": "0357c1d83b7c627700e272494109904bc107922abcfecc84ddf8efa288f7f72a",
+    "swing_retention_bumper_0.stl": "3a415819e9bd04f460f78db8bec67b9bd3be0d464520bc000050e21f4da28180",
+    "swing_retention_bumper_1.stl": "700390a9bb9f41a40b26ccd01f0258d01c17c013f9ea79447664b148778367ea",
+    "swing_retention_bumper_2.stl": "3810e661c0efcc0e48ff926aa34f3088775c3b1a3751a216365bbb815a724382"
+  },
+  "checkpoint": {
+    "file": "alpha050.pt",
+    "sha256": "49fb3599be519cb604ed65e1ba495fb9f5746e5bee1d4cb95107dcd165f47f9c",
+    "source_path": "experiments/swing/checkpoints/alpha050.pt",
+    "git_tracked": false
+  }
+}

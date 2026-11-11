@@ -70,6 +70,7 @@ def test_soft_surface_does_not_end_recovery_at_low_trunk_height(task, expected_d
         )
         env.terrain = SimpleNamespace(
             origins=torch.zeros(1, 3), guard=guard, update_support=lambda pose: None,
+            config=PAD_CONFIG, has_pad=torch.ones(1, dtype=torch.bool),
             heights=lambda positions, rotations=None: positions[..., 2].clamp_min(0),
             out_of_bounds=lambda pose: torch.zeros(1, dtype=torch.bool), log=lambda *args: {},
         )

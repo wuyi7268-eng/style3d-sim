@@ -30,7 +30,7 @@ from .policy_spec import EFFORT, KD, KP, filter_authored_collider
 
 # Optional hammock, sand, stair, and fluid-pool scenes
 
-SCENE_KINDS = ("hammock", "sand", "steps", "pool")
+SCENE_KINDS = ("hammock", "cloth", "sand", "steps", "pool", "trampoline", "elastic_bridge")
 
 
 @dataclass(frozen=True)
@@ -44,6 +44,34 @@ class SceneConfig:
     hammock_density: float = 2.0
     hammock_stretch: float = 1200.0
     hammock_bend: float = 2.0e-4
+    cloth_length: float = 1.2
+    cloth_width: float = 1.2
+    cloth_resolution: int = 25
+    cloth_sag: float = 0.22
+    cloth_density: float = 2.0
+    cloth_stretch: float = 400.0
+    cloth_bend: float = 2.0e-4
+    # Keep both legacy dimensions; the circular bed fits inside the smaller one.
+    trampoline_length: float = 0.8
+    trampoline_width: float = 0.8
+    trampoline_height: float = 0.40
+    trampoline_resolution: int = 25
+    trampoline_density: float = 0.3
+    trampoline_stretch: float = 1800.0
+    trampoline_damping: float = 0.05
+    elastic_bridge_length: float = 1.2
+    elastic_bridge_width: float = 0.29
+    elastic_bridge_height: float = 0.65
+    elastic_bridge_sag: float = 0.04
+    elastic_bridge_cells_x: int = 40
+    elastic_bridge_cells_y: int = 10
+    elastic_bridge_density: float = 0.6
+    elastic_bridge_stretch: float = 1600.0
+    elastic_bridge_bend: float = 2.0
+    elastic_bridge_damping: float = 0.2
+    elastic_bridge_approach_length: float = 0.8
+    elastic_bridge_approach_width: float = 0.8
+    elastic_bridge_spawn_distance: float = 0.4
     sand_length: float = 0.32
     sand_width: float = 0.24
     sand_depth: float = 0.02
@@ -71,6 +99,66 @@ class SceneConfig:
 
 
 SCENE_CONFIG = SceneConfig()
+
+_BRIDGE_EQUILIBRIA = {}
+
+
+def settled_bridge_state(config, physics, device):
+    """Relax an unloaded template without changing its constitutive rest shape or runtime damping."""
+    import style3d_sim as s3d
+
+    key = (json.dumps(asdict(config), sort_keys=True), json.dumps(asdict(physics), sort_keys=True), str(device))
+    if key in _BRIDGE_EQUILIBRIA:
+        return _BRIDGE_EQUILIBRIA[key]
+    builder = s3d.ModelBuilder()
+    add_elastic_bridge(builder, config)
+    model = builder.finalize(device=str(device))
+    model.set_gravity((0.0, 0.0, -9.81))
+    solver = s3d.NewtonSolver(model)
+    physics.configure_synreal(solver)
+    collision = newton.CollisionPipeline(model, enable_rigid_soft_full_surface_contact=True, soft_contact_max=8192)
+    contacts = collision.contacts()
+    solver.prepare_contacts(contacts)
+    current, next_state = model.state(), model.state()
+    control = model.control()
+    indices = np.unique(model.tri_indices.numpy())
+    rest = model.particle_q.numpy()[indices].copy()
+    quiet_steps = 0
+    print("Elastic bridge: relaxing unloaded support before robot spawn...", flush=True)
+    for step in range(4000):
+        current.clear_forces()
+        collision.collide(current, contacts)
+        solver.step(current, next_state, control, contacts, physics.physics_dt)
+        current, next_state = next_state, current
+        velocity = wp.to_torch(current.particle_qd)
+        speed = velocity.norm(dim=1).max().item()
+        if not math.isfinite(speed) or not torch.isfinite(wp.to_torch(current.particle_q)).all():
+            raise FloatingPointError("Elastic bridge relaxation produced non-finite state")
+        # Numerical relaxation is initialization only; normal playback uses the authored material damping.
+        velocity.mul_(0.9)
+        quiet_steps = quiet_steps + 1 if speed < 1.0e-4 else 0
+        if quiet_steps >= 100:
+            break
+    else:
+        raise RuntimeError("Elastic bridge failed to settle within 4000 substeps; check geometry/material parameters")
+    equilibrium = current.particle_q.numpy()[indices].copy()
+    current.particle_qd.zero_()
+    # Releasing all artificial damping must not restart a visible oscillation.
+    drift = 0.0
+    for _ in range(math.ceil(0.5 / physics.physics_dt)):
+        current.clear_forces()
+        collision.collide(current, contacts)
+        solver.step(current, next_state, control, contacts, physics.physics_dt)
+        current, next_state = next_state, current
+        drift = max(drift, float(np.linalg.norm(current.particle_q.numpy()[indices] - equilibrium, axis=1).max()))
+        if not np.isfinite(current.particle_q.numpy()).all() or drift > 5.0e-5:
+            raise RuntimeError("Elastic bridge equilibrium drifts after relaxation; refusing an unsettled reset state")
+    report = {"relaxation_substeps": step + 1, "release_drift_m": drift,
+              "max_settling_displacement_m": float(np.linalg.norm(equilibrium - rest, axis=1).max())}
+    result = (rest, equilibrium, report)
+    _BRIDGE_EQUILIBRIA[key] = result
+    print(f"Elastic bridge ready: release drift={drift:.3g} m, relaxation steps={step + 1}", flush=True)
+    return result
 
 
 class _TransparentWaterMesh:
@@ -139,6 +227,12 @@ def add_scene(builder, kind, config=SCENE_CONFIG):
         raise ValueError(f"unsupported optional scene: {kind}")
     cfg = builder.default_shape_cfg.copy()
     cfg.mu = config.sand_friction
+    if kind == "cloth":
+        return add_corner_cloth(builder, config)
+    if kind == "trampoline":
+        return add_trampoline(builder, config)
+    if kind == "elastic_bridge":
+        return add_elastic_bridge(builder, config)
     if kind == "pool":
         if not 0 < config.pool_depth < config.pool_wall_height:
             raise ValueError("Pool water depth must be positive and below the wall height")
@@ -260,6 +354,190 @@ def add_scene(builder, kind, config=SCENE_CONFIG):
     }
 
 
+def add_corner_cloth(builder, config):
+    """Create a square sagging cloth supported only at its four corners."""
+    from newton.solvers import style3d
+
+    provision_pad_contacts(builder)
+    newton.solvers.SolverStyle3D.register_custom_attributes(builder)
+    n = config.cloth_resolution
+    if isinstance(n, bool) or not isinstance(n, int) or n < 3:
+        raise ValueError("cloth_resolution must be an integer >= 3")
+    if min(config.cloth_length, config.cloth_width, config.cloth_sag) <= 0:
+        raise ValueError("Cloth dimensions and sag must be positive")
+    xs = np.linspace(-config.cloth_length / 2, config.cloth_length / 2, n)
+    ys = np.linspace(-config.cloth_width / 2, config.cloth_width / 2, n)
+    xx, yy = np.meshgrid(xs, ys, indexing="ij")
+    shape = (1 - (2 * xx / config.cloth_length) ** 2) * (1 - (2 * yy / config.cloth_width) ** 2)
+    zz = 1.15 - config.cloth_sag * shape
+    vertices = np.stack((xx, yy, zz), axis=-1).reshape(-1, 3).astype(np.float32)
+    faces = []
+    for row in range(n - 1):
+        for col in range(n - 1):
+            a = row * n + col
+            faces.extend(((a, a + n, a + n + 1), (a, a + n + 1, a + 1)))
+    start = len(builder.particle_q)
+    style3d.add_cloth_mesh(
+        builder,
+        pos=wp.vec3(0.0),
+        rot=wp.quat_identity(),
+        vel=wp.vec3(0.0),
+        vertices=vertices.tolist(),
+        indices=np.asarray(faces, dtype=np.int32).reshape(-1).tolist(),
+        density=config.cloth_density,
+        tri_aniso_ke=wp.vec3(config.cloth_stretch, config.cloth_stretch, config.cloth_stretch),
+        edge_aniso_ke=wp.vec3(config.cloth_bend),
+        tri_kd=1.0,
+        edge_kd=0.01,
+        particle_radius=0.006,
+        label="microduck_corner_cloth",
+    )
+    for row, col in ((0, 0), (0, n - 1), (n - 1, 0), (n - 1, n - 1)):
+        index = start + row * n + col
+        builder.particle_flags[index] &= ~int(newton.ParticleFlags.ACTIVE)
+        builder.particle_mass[index] = 0.0
+        x, y = xs[row], ys[col]
+        _box(builder, (x, y, 1.15), (0.045, 0.045, 0.045), (0.20, 0.24, 0.27), "cloth_corner_mount")
+        _box(builder, (x, y, 0.575), (0.018, 0.018, 0.575), (0.32, 0.38, 0.39), "cloth_support_post")
+    return {"kind": "cloth", "config": asdict(config), "support": "sagging_cloth_fixed_at_four_corners",
+            "particle_range": [start, start + n * n]}
+
+
+def add_trampoline(builder, config):
+    """A circular elastic membrane with a pinned perimeter and open space underneath."""
+    from newton.solvers import style3d
+
+    n = config.trampoline_resolution
+    if isinstance(n, bool) or not isinstance(n, int) or n < 3:
+        raise ValueError("trampoline_resolution must be an integer >= 3")
+    for name in ("length", "width", "height", "density", "stretch"):
+        value = getattr(config, f"trampoline_{name}")
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"trampoline_{name} must be finite and positive")
+    if not math.isfinite(config.trampoline_damping) or config.trampoline_damping < 0:
+        raise ValueError("trampoline_damping must be finite and nonnegative")
+    provision_pad_contacts(builder)
+    newton.solvers.SolverStyle3D.register_custom_attributes(builder)
+    radius = min(config.trampoline_length, config.trampoline_width) / 2
+    z = config.trampoline_height
+    xx, yy = np.meshgrid(np.linspace(-1, 1, n), np.linspace(-1, 1, n), indexing="ij")
+    # Map the square grid onto a disk without duplicated center vertices or collapsed faces.
+    distance = np.hypot(xx, yy)
+    scale = np.divide(radius * np.maximum(np.abs(xx), np.abs(yy)), distance,
+                      out=np.zeros_like(distance), where=distance > 0)
+    xx, yy = xx * scale, yy * scale
+    vertices = np.stack((xx, yy, np.full_like(xx, z)), axis=-1).reshape(-1, 3)
+    faces = []
+    for row in range(n - 1):
+        for col in range(n - 1):
+            a = row * n + col
+            faces.extend(((a, a + n, a + n + 1), (a, a + n + 1, a + 1)))
+    start = len(builder.particle_q)
+    style3d.add_cloth_mesh(
+        builder, pos=wp.vec3(0.0), rot=wp.quat_identity(), vel=wp.vec3(0.0),
+        vertices=vertices.tolist(), indices=np.asarray(faces).ravel().tolist(),
+        density=config.trampoline_density, tri_aniso_ke=wp.vec3(config.trampoline_stretch),
+        edge_aniso_ke=wp.vec3(2.0e-4), tri_kd=config.trampoline_damping, edge_kd=0.001,
+        particle_radius=0.003, label="microduck_trampoline",
+    )
+    for row in range(n):
+        for col in range(n):
+            if row in (0, n - 1) or col in (0, n - 1):
+                index = start + row * n + col
+                builder.particle_flags[index] &= ~int(newton.ParticleFlags.ACTIVE)
+                builder.particle_mass[index] = 0.0
+    frame_radius = radius + 0.025
+    # The same overlapping tube segments provide both the visible ring and rigid collision.
+    segments = 48
+    for segment in range(segments):
+        angles = np.array([segment, segment + 1]) * math.tau / segments
+        a, b = [wp.vec3(frame_radius * math.cos(angle), frame_radius * math.sin(angle), z) for angle in angles]
+        delta = b - a
+        builder.add_shape_capsule(
+            -1, radius=0.025, half_height=float(wp.length(delta)) / 2,
+            xform=wp.transform((a + b) * 0.5, wp.quat_between_vectors(wp.vec3(0, 0, 1), wp.normalize(delta))),
+            color=(0.06, 0.55, 0.65), label="trampoline_frame",
+        )
+    for angle in np.arange(4) * math.pi / 2 + math.pi / 4:
+        _box(builder, (frame_radius * math.cos(angle), frame_radius * math.sin(angle), z / 2),
+             (0.018, 0.018, z / 2), (0.22, 0.25, 0.28), "trampoline_leg")
+    _box(builder, (0, 0, -0.025), (radius + 0.35, radius + 0.35, 0.025),
+         (0.42, 0.46, 0.43), "trampoline_floor")
+    return {"kind": "trampoline", "config": asdict(config), "support": "elastic_cloth_fixed_perimeter",
+            "shape": "circle", "radius": radius,
+            "particle_range": [start, start + n * n]}
+
+
+def add_elastic_bridge(builder, config):
+    """A compliant walking strip clamped at its two short ends, with free long edges."""
+    from newton.solvers import style3d
+
+    for name in ("length", "width", "height", "density", "stretch", "approach_length", "approach_width", "spawn_distance"):
+        value = getattr(config, f"elastic_bridge_{name}")
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"elastic_bridge_{name} must be finite and positive")
+    for name in ("sag", "bend", "damping"):
+        value = getattr(config, f"elastic_bridge_{name}")
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(f"elastic_bridge_{name} must be finite and nonnegative")
+    for name in ("cells_x", "cells_y"):
+        value = getattr(config, f"elastic_bridge_{name}")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 2:
+            raise ValueError(f"elastic_bridge_{name} must be an integer >= 2")
+    if config.elastic_bridge_sag >= config.elastic_bridge_height:
+        raise ValueError("Elastic bridge sag must leave space above the floor")
+    if min(config.elastic_bridge_length, config.elastic_bridge_width) <= 0.08:
+        raise ValueError("Elastic bridge dimensions must exceed the training edge margins")
+    if config.elastic_bridge_approach_width < config.elastic_bridge_width:
+        raise ValueError("Approach must be at least as wide as the bridge")
+    if not 0.1 < config.elastic_bridge_spawn_distance < config.elastic_bridge_approach_length - 0.1:
+        raise ValueError("Spawn must leave 10 cm clearance from both approach ends")
+    provision_pad_contacts(builder)
+    newton.solvers.SolverStyle3D.register_custom_attributes(builder)
+    hx, hy, height = config.elastic_bridge_length / 2, config.elastic_bridge_width / 2, config.elastic_bridge_height
+    nx, ny = config.elastic_bridge_cells_x + 1, config.elastic_bridge_cells_y + 1
+    xx, yy = np.meshgrid(np.linspace(-hx, hx, nx), np.linspace(-hy, hy, ny), indexing="ij")
+    zz = height - config.elastic_bridge_sag * (1 - (xx / hx) ** 2)
+    vertices = np.stack((xx, yy, zz), axis=-1).reshape(-1, 3)
+    faces = []
+    for row in range(nx - 1):
+        for col in range(ny - 1):
+            a = row * ny + col
+            faces.extend(((a, a + ny, a + ny + 1), (a, a + ny + 1, a + 1)))
+    start = len(builder.particle_q)
+    style3d.add_cloth_mesh(
+        builder, pos=wp.vec3(0.0), rot=wp.quat_identity(), vel=wp.vec3(0.0),
+        vertices=vertices.tolist(), indices=np.asarray(faces).ravel().tolist(),
+        density=config.elastic_bridge_density, tri_aniso_ke=wp.vec3(config.elastic_bridge_stretch),
+        edge_aniso_ke=wp.vec3(config.elastic_bridge_bend), tri_kd=config.elastic_bridge_damping,
+        edge_kd=0.001, particle_radius=0.003, label="microduck_elastic_bridge",
+    )
+    # Pin every vertex across each end; the free sides must remain able to twist and sag.
+    for row in (0, nx - 1):
+        for col in range(ny):
+            index = start + row * ny + col
+            builder.particle_flags[index] &= ~int(newton.ParticleFlags.ACTIVE)
+            builder.particle_mass[index] = 0.0
+    for sign in (-1, 1):
+        anchor_half_width = config.elastic_bridge_approach_width / 2 if sign == -1 else hy + 0.07
+        _box(builder, (sign * (hx + 0.04), 0, height - 0.025), (0.04, anchor_half_width, 0.025),
+             (0.10, 0.46, 0.53), "elastic_bridge_anchor")
+        for side in (-1, 1):
+            _box(builder, (sign * (hx + 0.04), side * (hy + 0.04), (height - 0.05) / 2),
+                 (0.025, 0.025, (height - 0.05) / 2), (0.25, 0.29, 0.31), "elastic_bridge_post")
+    approach = config.elastic_bridge_approach_length
+    # Meet the inlet beam exactly: avoid a step, gap, or overlapping coplanar contact surfaces.
+    _box(builder, (-hx - (approach + 0.08) / 2, 0, height / 2),
+         ((approach - 0.08) / 2, config.elastic_bridge_approach_width / 2, height / 2),
+         (0.58, 0.62, 0.60), "elastic_bridge_approach")
+    # The floor catches falls; no rigid shape extends into the flexible span.
+    _box(builder, (-approach / 2, 0, -0.025),
+         (hx + approach / 2 + 0.35, max(hy, config.elastic_bridge_approach_width / 2) + 0.4, 0.025),
+         (0.42, 0.46, 0.43), "elastic_bridge_floor")
+    return {"kind": "elastic_bridge", "config": asdict(config), "support": "elastic_strip_fixed_short_ends",
+            "particle_range": [start, start + nx * ny]}
+
+
 class SceneTerrain:
     """Terrain interface for optional scenes without the soft-pad guard."""
 
@@ -272,6 +550,21 @@ class SceneTerrain:
         env.cfg["terrain"] = self.cfg
 
     def finalize(self):
+        if self.kind in ("trampoline", "cloth", "elastic_bridge"):
+            model = self.env.model
+            # Resolve after finalize: affine proxy insertion can reorder particles.
+            indices = np.unique(model.tri_indices.numpy())
+            self.cloth_indices = torch.as_tensor(indices, device=self.env.device, dtype=torch.long)
+            self.cloth_worlds = wp.to_torch(model.particle_world)[self.cloth_indices].long().clamp_min(0)
+            if self.kind in ("cloth", "elastic_bridge"):
+                # Reuse the soft-contact sensor's topology mask; exclude rigid affine proxies.
+                mask = torch.zeros(model.particle_count, dtype=torch.int32, device=self.env.device)
+                mask[self.cloth_indices] = 1
+                self.pad_particle = wp.from_torch(mask)
+                topology = wp.to_torch(model.tri_indices).long()
+                worlds = wp.to_torch(model.particle_world)[topology[:, 0]].clamp_min(0)
+                self.surface_triangles = torch.stack([topology[worlds == w] for w in range(self.env.num_envs)])
+            return
         if self.kind not in ("sand", "pool"):
             return
         from style3d_sim import configure_granular
@@ -323,8 +616,66 @@ class SceneTerrain:
         )
         self.cfg["granular_particle_count"] = len(indices)
 
+    def initialize_rest_state(self):
+        if self.kind != "elastic_bridge" or self.env.solver is None:
+            return
+        rest, equilibrium, report = settled_bridge_state(SceneConfig(**self.cfg["config"]),
+                                                        self.env.physics, self.env.device)
+        self.reset_particle_q = wp.to_torch(self.env.model.particle_q).clone()
+        for world in range(self.env.num_envs):
+            selected = self.cloth_indices[self.cloth_worlds == world]
+            # Finalization may insert rigid proxies; never assume an authored particle offset survives.
+            if not np.allclose(self.reset_particle_q[selected].cpu().numpy(), rest, rtol=0, atol=1e-6):
+                raise ValueError("Bridge equilibrium particle ordering does not match the replicated template")
+            self.reset_particle_q[selected] = torch.as_tensor(equilibrium, device=self.env.device)
+        self.cfg["initial_equilibrium"] = dict(report)
+        self.bridge_sleeping = torch.ones(self.env.num_envs, dtype=torch.bool, device=self.env.device)
+        for state in self.env.states:
+            wp.to_torch(state.particle_q)[self.cloth_indices] = self.reset_particle_q[self.cloth_indices]
+            wp.to_torch(state.particle_qd)[self.cloth_indices] = 0
+        self.env._sync()
+
+    def wake_bridge_contacts(self, contacts):
+        """Wake per world before solving a robot contact, including its contact-generation margin."""
+        if not hasattr(self, "bridge_sleeping") or not self.bridge_sleeping.any():
+            return
+        count = int(wp.to_torch(contacts.soft_contact_count)[0])
+        indices = wp.to_torch(contacts.soft_contact_indices)[:count].long()
+        shapes = wp.to_torch(contacts.soft_contact_shape)[:count].long()
+        valid = (shapes >= 0) & (indices[:, 0] >= 0)
+        particles = indices[valid, 0]
+        bodies = wp.to_torch(self.env.model.shape_body)[shapes[valid]]
+        cloth = wp.to_torch(self.pad_particle)[particles] != 0
+        worlds = wp.to_torch(self.env.model.particle_world)[particles[cloth & (bodies >= 0)]].long().clamp_min(0)
+        self.bridge_sleeping[worlds] = False
+        # Manual perturbations must wake the membrane too, even with no robot contact.
+        state = self.env.states[0]
+        velocity = wp.to_torch(state.particle_qd)[self.cloth_indices]
+        force = wp.to_torch(state.particle_f)[self.cloth_indices]
+        disturbed = (velocity.abs().amax(-1) > 1.0e-5) | (force.abs().amax(-1) > 1.0e-5)
+        self.bridge_sleeping[self.cloth_worlds[disturbed]] = False
+
+    def hold_sleeping_bridges(self):
+        if not hasattr(self, "bridge_sleeping"):
+            return
+        selected = self.cloth_indices[self.bridge_sleeping[self.cloth_worlds]]
+        # Rigid solver residuals must not re-excite an unloaded, equilibrated membrane.
+        # Once touched, it stays fully dynamic until the next explicit/episode reset.
+        for state in self.env.states:
+            wp.to_torch(state.particle_q)[selected] = self.reset_particle_q[selected]
+            wp.to_torch(state.particle_qd)[selected] = 0
+
     def reset(self, ids):
         self.origins[ids] = 0
+        if hasattr(self, "bridge_sleeping"):
+            self.bridge_sleeping[ids] = True
+        if self.kind in ("trampoline", "cloth", "elastic_bridge"):
+            selected = self.cloth_indices[torch.isin(self.cloth_worlds, ids)]
+            for state in self.env.states:
+                reset_q = getattr(self, "reset_particle_q", wp.to_torch(self.env.model.particle_q))
+                wp.to_torch(state.particle_q)[selected] = reset_q[selected]
+                wp.to_torch(state.particle_qd)[selected] = 0
+            self.env._sync()
         if self.kind == "pool":
             model = self.env.model
             indices = wp.to_torch(model.synreal_fluid_particle_indices).long()
@@ -338,10 +689,24 @@ class SceneTerrain:
 
     def adjust_spawn(self, ids):
         spawn = self.env.task_logic.spawn
-        if self.kind == "hammock":
+        if self.kind == "trampoline":
+            spawn[ids, :2] = 0
+            self.origins[ids, 2] = self.cfg["config"]["trampoline_height"]
+            spawn[ids, 2] += self.origins[ids, 2] + 0.01
+        elif self.kind == "hammock":
             spawn[ids, 0] = 0
             spawn[ids, 1] = 0
             self.origins[ids, 2] = 1.15 - self.cfg["config"]["hammock_sag"]
+            spawn[ids, 2] += self.origins[ids, 2]
+        elif self.kind in ("cloth", "elastic_bridge"):
+            spawn[ids, :2] = 0
+            config = self.cfg["config"]
+            if self.kind == "elastic_bridge":
+                # Reset restores the relaxed membrane before sampling its actual support height.
+                points = torch.zeros(self.env.num_envs, 1, 3, device=self.env.device)
+                self.origins[ids, 2] = self.surface_heights(points)[ids, 0]
+            else:
+                self.origins[ids, 2] = 1.15 - config["cloth_sag"]
             spawn[ids, 2] += self.origins[ids, 2]
         elif self.kind == "sand":
             spawn[ids, :2] = 0
@@ -357,10 +722,14 @@ class SceneTerrain:
 
     def heights(self, positions, quaternions=None):
         support = self.origins[:, None, 2]
+        if self.kind == "trampoline":
+            support = self.surface_heights(positions)
         if self.kind == "hammock":
             config = self.cfg["config"]
             x = positions[..., 0]
             support = 1.15 - config["hammock_sag"] * (1 - (2 * x / config["hammock_length"]) ** 2)
+        elif self.kind in ("cloth", "elastic_bridge"):
+            support = self.surface_heights(positions)
         elif self.kind == "steps":
             config = self.cfg["config"]
             x, y = positions[..., 0], positions[..., 1]
@@ -369,14 +738,82 @@ class SceneTerrain:
             support = torch.where(y.abs() <= config["step_width"] / 2, support, 0.0)
         return (positions[..., 2] - support).clamp(0.0, 1.0)
 
+    def surface_heights(self, positions):
+        """Query the deformed triangles, including the edges of a small foot collider."""
+        points = positions.reshape(self.env.num_envs, -1, 3)
+        if self.kind in ("cloth", "elastic_bridge"):
+            # Batched queries avoid 64 Python/CUDA launch sequences per observation.
+            triangles = wp.to_torch(self.env.states[0].particle_q)[self.surface_triangles]
+            a, b, c = triangles.unbind(2)
+            u, v = b[..., :2] - a[..., :2], c[..., :2] - a[..., :2]
+            delta = points[:, :, None, :2] - a[:, None, :, :2]
+            det = u[..., 0] * v[..., 1] - u[..., 1] * v[..., 0]
+            valid = det.abs() > 1e-12
+            denom = torch.where(valid, det, 1.0)[:, None]
+            s = (delta[..., 0] * v[:, None, :, 1] - delta[..., 1] * v[:, None, :, 0]) / denom
+            t = (u[:, None, :, 0] * delta[..., 1] - u[:, None, :, 1] * delta[..., 0]) / denom
+            inside = valid[:, None] & (s >= -1e-5) & (t >= -1e-5) & (s + t <= 1 + 1e-5)
+            height = a[:, None, :, 2] + s * (b - a)[:, None, :, 2] + t * (c - a)[:, None, :, 2]
+            result = torch.where(inside, height, 0.0).amax(-1).reshape(positions.shape[:-1])
+            if self.kind == "elastic_bridge":
+                config = self.cfg["config"]
+                x, y = positions[..., 0], positions[..., 1]
+                inlet = -config["elastic_bridge_length"] / 2
+                on_approach = ((x >= inlet - config["elastic_bridge_approach_length"]) & (x <= inlet)
+                               & (y.abs() <= config["elastic_bridge_approach_width"] / 2))
+                result = torch.where(on_approach, config["elastic_bridge_height"], result)
+            return result
+        result = torch.zeros(points.shape[:2], device=points.device)
+        topology = wp.to_torch(self.env.model.tri_indices).long()
+        worlds = wp.to_torch(self.env.model.particle_world)[topology[:, 0]].clamp_min(0)
+        particles = wp.to_torch(self.env.states[0].particle_q)
+        # Chunk queries by world to avoid a cross-world point/triangle product.
+        for world in range(self.env.num_envs):
+            tri = particles[topology[worlds == world]]
+            a, b, c = tri.unbind(1)
+            u, v = b[:, :2] - a[:, :2], c[:, :2] - a[:, :2]
+            delta = points[world, :, None, :2] - a[None, :, :2]
+            det = u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0]
+            valid = det.abs() > 1e-12
+            denom = torch.where(valid, det, torch.ones_like(det))
+            s = (delta[..., 0] * v[:, 1] - delta[..., 1] * v[:, 0]) / denom
+            t = (u[:, 0] * delta[..., 1] - u[:, 1] * delta[..., 0]) / denom
+            inside = valid & (s >= -1e-5) & (t >= -1e-5) & (s + t <= 1 + 1e-5)
+            height = a[:, 2] + s * (b[:, 2] - a[:, 2]) + t * (c[:, 2] - a[:, 2])
+            result[world] = torch.where(inside, height, 0.0).amax(-1)
+        return result.reshape(positions.shape[:-1])
+
     def update_support(self, pose):
+        if self.kind in ("trampoline", "cloth", "elastic_bridge"):
+            self.origins[:, 2] = self.surface_heights(pose[:, None, :3]).squeeze(1)
         if self.kind == "steps":
             x = pose[:, 0]
             index = torch.floor((x + SCENE_CONFIG.step_run / 2) / SCENE_CONFIG.step_run).long() + 1
             height = index.clamp(0, SCENE_CONFIG.step_count) * SCENE_CONFIG.step_rise
             self.origins[:, 2] = torch.where(x < -SCENE_CONFIG.step_run / 2, 0.0, height)
 
+    def side_out_of_bounds(self, positions):
+        """Follow the wider rigid approach and the narrower flexible span without an inlet timeout."""
+        config = self.cfg["config"]
+        width = torch.where(positions[:, 0] < -config["elastic_bridge_length"] / 2,
+                            config["elastic_bridge_approach_width"], config["elastic_bridge_width"])
+        return positions[:, 1].abs() > width / 2 - 0.04
+
     def out_of_bounds(self, positions):
+        if self.kind == "elastic_bridge":
+            config = self.cfg["config"]
+            hx = config["elastic_bridge_length"] / 2
+            return ((positions[:, 0] < -hx - config["elastic_bridge_approach_length"] + 0.04)
+                    | (positions[:, 0] > hx - 0.04) | self.side_out_of_bounds(positions))
+        if self.kind == "trampoline":
+            config = self.cfg["config"]
+            radius = min(config["trampoline_length"], config["trampoline_width"]) / 2
+            return torch.linalg.vector_norm(positions[:, :2], dim=-1) > radius - 0.04
+        if self.kind == "cloth":
+            config = self.cfg["config"]
+            prefix = self.kind
+            return ((positions[:, 0].abs() > config[f"{prefix}_length"] / 2 - 0.04)
+                    | (positions[:, 1].abs() > config[f"{prefix}_width"] / 2 - 0.04))
         if self.kind == "pool":
             config = self.cfg["config"]
             return ((positions[:, 0].abs() > config["pool_length"] / 2 + config["pool_wall_thickness"])
@@ -387,6 +824,10 @@ class SceneTerrain:
         return None
 
     def configure_viewer(self, viewer):
+        if self.kind == "elastic_bridge" and self.env.num_envs == 1:
+            viewer.set_camera(pos=wp.vec3(2.0, -2.8, 1.9), pitch=-22.0, yaw=132.0)
+        if self.kind == "trampoline" and self.env.num_envs == 1:
+            viewer.set_camera(pos=wp.vec3(1.1, -1.4, 1.0), pitch=-20.0, yaw=128.0)
         if self.kind == "pool" and self.env.num_envs == 1:
             viewer.set_camera(pos=wp.vec3(0.8, -1.0, 0.85), pitch=-30.0, yaw=129.0)
         if self.kind == "sand" and self.env.num_envs == 1:

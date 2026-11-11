@@ -1,0 +1,53 @@
+{
+  "contract": "basketball_blind_lstm_pd_v1",
+  "source_revision": "052a2494dd6372289221c7a4f24a245b443dd75f",
+  "episode_s": 10.0,
+  "action_scale": 1.0,
+  "geometry": {
+    "radius": 0.12,
+    "mass": 0.62,
+    "root_height": 0.125,
+    "friction": [1.2, 0.01, 0.001]
+  },
+  "physics": {
+    "physics_dt": 0.002,
+    "decimation": 10,
+    "joint_constraint_primal_iterations": 4
+  },
+  "reset": {"xy_noise": 0.01, "tilt_deg": 2.0, "joint_noise": 0.05},
+  "noise": {"angular": 0.02, "gravity": 0.006, "position": 0.001, "velocity": 0.25},
+  "commands": {"limits": [0.15, 0.10, 0.50], "resample_s": [3.0, 8.0], "standing_probability": 0.2},
+  "hold": {
+    "levels": [1.0, 0.5, 0.25, 0.1, 0.03, 0.0],
+    "promote_s": 6.0,
+    "demote_s": 1.5,
+    "ball_kp": 400.0,
+    "ball_kd": 20.0,
+    "ball_kd_rot": 0.2,
+    "duck_kp": 40.0,
+    "duck_kd": 4.0,
+    "duck_kp_rot": 3.0,
+    "duck_kd_rot": 0.08
+  },
+  "termination": {"tilt_deg": 55.0, "min_height": 0.05, "max_offset": 0.16},
+  "rewards": {
+    "track_linear": {"weight": 1.0, "variance": 0.1},
+    "track_angular": {"weight": 0.5, "variance": 0.5},
+    "upright": {"weight": 1.0, "std": 0.3},
+    "centered": {"weight": 2.0, "std": 0.04},
+    "feet_on_ball": {"weight": 1.0, "std": 0.02, "sole_gap": 0.012},
+    "height": {"weight": 1.0, "std": 0.03},
+    "ball_speed": {"weight": -0.05},
+    "body_ang_vel": {"weight": -0.05},
+    "action_rate": {"weight": -0.2},
+    "joint_torques": {"weight": -0.001},
+    "joint_limits": {"weight": -1.0}
+  },
+  "ppo": {
+    "num_steps_per_env": 24,
+    "save_interval": 100,
+    "policy": {"class_name": "ActorCriticRecurrent", "rnn_type": "lstm", "rnn_hidden_dim": 256,
+               "rnn_num_layers": 1, "init_noise_std": 0.3},
+    "algorithm": {"learning_rate": 0.0001, "schedule": "fixed", "entropy_coef": 0.002}
+  }
+}

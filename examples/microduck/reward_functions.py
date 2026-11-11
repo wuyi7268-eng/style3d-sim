@@ -2614,6 +2614,159 @@ def _command_speed(command, yaw_speed_scale):
     return torch.linalg.vector_norm(command[:, :2], dim=-1) + yaw_speed_scale * command[:, 2].abs()
 
 
+def _on_soft_pad(recipe):
+    """Scope shaping to the pad footprint, not just the world's birth cohort."""
+    data = recipe.scene["robot"].data
+    env = getattr(recipe, "env", None)
+    if not getattr(env, "mixed_terrain", False):
+        return torch.zeros_like(data.root_link_pos_w[:, 0], dtype=torch.bool)
+    extent = data.root_link_pos_w.new_tensor(env.terrain.config.size[:2]) / 2
+    return env.terrain.has_pad & (data.root_link_pos_w[:, :2].abs() < extent).all(-1)
+
+
+def soft_pad_velocity_tracking(recipe, command_name, min_std, relative_std, max_std, yaw_std,
+                               command_threshold, max_tilt_deg, broad_fraction=0.0):
+    """Resolve low-speed stalling while requiring translation and yaw to agree together."""
+    command = recipe.command_manager.get_command(command_name)
+    data = recipe.scene["robot"].data
+    speed = command[:, :2].norm(dim=-1)
+    std = (relative_std * speed).clamp(min_std, max_std)
+    error = (data.root_link_lin_vel_b[:, :2] - command[:, :2]).square().sum(-1) / std.square()
+    error += ((data.root_link_ang_vel_b[:, 2] - command[:, 2]) / yaw_std).square()
+    active = _on_soft_pad(recipe) & (speed > command_threshold)
+    active &= -data.projected_gravity_b[:, 2] >= math.cos(math.radians(max_tilt_deg))
+    # Preserve a narrow optimum while providing a graded signal far from the target.
+    value = ((1 - broad_fraction) * torch.exp(-error) + broad_fraction / (1 + error)) * active
+    count = active.sum().clamp_min(1)
+    log = recipe.extras["log"]
+    log["Metrics/pad_fine_velocity_tracking"] = value.sum() / count
+    log["Metrics/pad_tracking_std_m_s"] = (std * active).sum() / count
+    return value
+
+
+def _soft_pad_motion_gate(recipe, command, cadence):
+    """Keep bounded exploration credit; full foot shaping requires useful, directed progress."""
+    options = cadence.get("soft_pad_motion") if cadence is not None else None
+    if _is_cloth(recipe):
+        options = cadence.get("cloth_motion") if cadence is not None else None
+        if options is None:
+            return torch.ones_like(command[:, 0])
+        data = recipe.scene["robot"].data
+        speed = command[:, :2].norm(dim=-1)
+        direction = command[:, :2] / speed[:, None].clamp_min(1.e-6)
+        velocity = data.root_link_lin_vel_b[:, :2]
+        along = (velocity * direction).sum(-1)
+        progress = (along / speed.clamp_min(1.e-6)).clamp(0, 1)
+        lateral = velocity - along[:, None] * direction
+        tracking = torch.exp(-lateral.square().sum(-1) / options["lateral_std"] ** 2
+                             - ((data.root_link_ang_vel_b[:, 2] - command[:, 2]) / options["yaw_std"]) ** 2)
+        gate = options["exploration_floor"] + (1 - options["exploration_floor"]) * progress * tracking
+        active = speed > cadence["linear_threshold"]
+        recipe.extras["log"]["Metrics/cloth_foot_motion_gate"] = (gate * active).sum() / active.sum().clamp_min(1)
+        return torch.where(active, gate, 1.0)
+    if options is None or not getattr(getattr(recipe, "env", None), "mixed_terrain", False):
+        return torch.ones_like(command[:, 0])
+    data = recipe.scene["robot"].data
+    speed = command[:, :2].norm(dim=-1)
+    direction = command[:, :2] / speed[:, None].clamp_min(1.e-6)
+    velocity = data.root_link_lin_vel_b[:, :2]
+    along = (velocity * direction).sum(-1)
+    progress = (along / speed.clamp_min(1.e-6)).clamp(0, 1)
+    lateral = velocity - along[:, None] * direction
+    tracking = torch.exp(-lateral.square().sum(-1) / options["lateral_std"] ** 2
+                         - ((data.root_link_ang_vel_b[:, 2] - command[:, 2]) / options["yaw_std"]) ** 2)
+    floor = options["exploration_floor"]
+    gate = floor + (1 - floor) * progress * tracking
+    active = _on_soft_pad(recipe) & (speed > cadence["linear_threshold"])
+    recipe.extras["log"]["Metrics/pad_foot_motion_gate"] = (gate * active).sum() / active.sum().clamp_min(1)
+    # Idle, pure yaw, rigid worlds and pad exits retain their original objectives.
+    return torch.where(active, gate, 1.0)
+
+
+def _is_cloth(recipe):
+    return getattr(getattr(getattr(recipe, "env", None), "terrain", None), "kind", None) in ("cloth", "elastic_bridge")
+
+
+def cloth_velocity_tracking(recipe, command_name, min_std, relative_std, max_std, yaw_std,
+                            command_threshold, max_tilt_deg, min_height, broad_fraction):
+    """Reward directed walking on cloth with a useful gradient even far from the target."""
+    data = recipe.scene["robot"].data
+    if not _is_cloth(recipe):
+        return torch.zeros_like(data.root_link_pos_w[:, 0])
+    command = recipe.command_manager.get_command(command_name)
+    speed = command[:, :2].norm(dim=-1)
+    std = (relative_std * speed).clamp(min_std, max_std)
+    error = (data.root_link_lin_vel_b[:, :2] - command[:, :2]).square().sum(-1) / std.square()
+    error += ((data.root_link_ang_vel_b[:, 2] - command[:, 2]) / yaw_std).square()
+    active = speed > command_threshold
+    active &= -data.projected_gravity_b[:, 2] >= math.cos(math.radians(max_tilt_deg))
+    active &= data.root_link_pos_w[:, 2] - recipe.scene.terrain.env_origins[:, 2] >= min_height
+    active &= ~recipe.env.terrain.out_of_bounds(data.root_link_pos_w)
+    value = ((1 - broad_fraction) * torch.exp(-error) + broad_fraction / (1 + error)) * active
+    recipe.extras["log"]["Metrics/cloth_fine_velocity_tracking"] = value.sum() / active.sum().clamp_min(1)
+    return value
+
+
+def cloth_command_progress(recipe, command_name, command_threshold, max_tilt_deg, min_height,
+                           lateral_std, yaw_std):
+    """Give dense credit for moving along a translational command on cloth."""
+    data = recipe.scene["robot"].data
+    if not _is_cloth(recipe):
+        return torch.zeros_like(data.root_link_pos_w[:, 0])
+    command = recipe.command_manager.get_command(command_name)
+    speed = command[:, :2].norm(dim=-1)
+    direction = command[:, :2] / speed[:, None].clamp_min(1.0e-6)
+    velocity = data.root_link_lin_vel_b[:, :2]
+    along = (velocity * direction).sum(-1)
+    lateral = velocity - along[:, None] * direction
+    progress = (along / speed.clamp_min(1.0e-6)).clamp(0.0, 1.0)
+    tracking_gate = torch.exp(-lateral.square().sum(-1) / lateral_std**2
+                              - ((data.root_link_ang_vel_b[:, 2] - command[:, 2]) / yaw_std).square())
+    active = speed > command_threshold
+    active &= -data.projected_gravity_b[:, 2] >= math.cos(math.radians(max_tilt_deg))
+    active &= data.root_link_pos_w[:, 2] - recipe.scene.terrain.env_origins[:, 2] >= min_height
+    active &= ~recipe.env.terrain.out_of_bounds(data.root_link_pos_w)
+    value = progress * tracking_gate * active
+    recipe.extras["log"]["Metrics/cloth_command_progress"] = value.sum() / active.sum().clamp_min(1)
+    return value
+
+
+def cloth_stall_penalty(recipe, command_name, command_threshold, max_tilt_deg, min_height,
+                        lateral_std, yaw_std):
+    """Keep the progress signal from being bypassed by a quiet upright policy."""
+    if not _is_cloth(recipe):
+        return torch.zeros_like(recipe.scene["robot"].data.root_link_pos_w[:, 0])
+    command = recipe.command_manager.get_command(command_name)
+    progress = cloth_command_progress(recipe, command_name, command_threshold, max_tilt_deg,
+                                      min_height, lateral_std, yaw_std)
+    active = command[:, :2].norm(dim=-1) > command_threshold
+    return (active.float() - progress).clamp_min(0.0)
+
+
+def cloth_contact_slip(recipe, sensor_name, slip_std):
+    """Bound the cost of stance slip relative to the cloth, including zero-command standing."""
+    data = recipe.scene[sensor_name].data
+    if not _is_cloth(recipe):
+        return torch.zeros_like(data.found[:, 0])
+    contact = data.soft_found > 0
+    squared = data.soft_slip_squared_sum / data.soft_found.clamp_min(1)
+    cost = 1 - torch.exp(-squared / slip_std**2)
+    recipe.extras["log"]["Metrics/cloth_relative_slip_m_s"] = (
+        (squared.sqrt() * contact).sum() / contact.sum().clamp_min(1)
+    )
+    recipe.extras["log"]["Metrics/cloth_foot_contact_fraction"] = contact.float().mean()
+    return (cost * contact).sum(-1) / contact.sum(-1).clamp_min(1)
+
+
+def cloth_nonfoot_contact(recipe, sensor_name, body_sensor_name):
+    """Do not let the trunk or shins substitute for foot support on a sagging sheet."""
+    feet = recipe.scene[sensor_name].data.found
+    if not _is_cloth(recipe):
+        return torch.zeros_like(feet[:, 0])
+    body = recipe.scene[body_sensor_name].data.found.sum(-1)
+    return (body > feet.sum(-1)).float()
+
+
 def commanded_step_frequency(command, cadence):
     """Return total left-plus-right steps/second, not same-foot gait cycles/second."""
     speed = command[:, :2].norm(dim=-1)
@@ -2857,12 +3010,15 @@ def commanded_foot_swing_progress(
 
 def commanded_feet_air_time(recipe, sensor_name, command_name, cadence):
     """Use fractions of a same-foot cycle; at four steps/s the window is 0.125--0.3 s."""
-    frequency, active = commanded_step_frequency(recipe.command_manager.get_command(command_name), cadence)
+    command = recipe.command_manager.get_command(command_name)
+    frequency, active = commanded_step_frequency(command, cadence)
     air_time = recipe.scene[sensor_name].data.current_air_time
     cycle = 2.0 / frequency[:, None]
     in_range = (air_time > cadence["air_fraction_min"] * cycle) & (air_time < cadence["air_fraction_max"] * cycle)
     recipe.extras["log"]["Metrics/air_time_mean"] = air_time.sum() / (air_time > 0).sum().clamp_min(1)
-    return in_range.float().sum(-1) * active * _cadence_upright(recipe, cadence)
+    return in_range.float().sum(-1) * active * _cadence_upright(recipe, cadence) * _soft_pad_motion_gate(
+        recipe, command, cadence
+    )
 
 
 def commanded_foot_clearance(
@@ -2900,7 +3056,7 @@ def commanded_foot_clearance(
     foot_speed = torch.linalg.vector_norm(foot_velocity, dim=-1)
     motion_gate = foot_speed / (foot_speed + motion_speed_scale)
     reward = torch.exp(-error) * motion_gate
-    return reward.sum(-1) * active
+    return reward.sum(-1) * active * _soft_pad_motion_gate(recipe, command, cadence)
 
 
 def commanded_foot_placement_reward(
@@ -3012,12 +3168,12 @@ class CommandedFootSwingHeight:
             (self.peak_heights * first_contact.float()).sum() / landings.clamp_min(1)
         )
         self.peak_heights = torch.where(first_contact, torch.zeros_like(self.peak_heights), self.peak_heights)
-        return reward
+        return reward * _soft_pad_motion_gate(recipe, command, cadence)
 
 
 def feet_surface_slip(recipe, sensor_name, command_name, command_threshold, asset_cfg):
     """Use contact-relative tangent slip on pads and the original XY cost on rigid ground."""
-    if not getattr(recipe.env, "mixed_terrain", False):
+    if not getattr(recipe.env, "mixed_terrain", False) and not _is_cloth(recipe):
         return velocity_rewards.feet_slip(recipe, sensor_name, command_name, command_threshold, asset_cfg)
     data = recipe.scene[sensor_name].data
     foot_velocity = recipe.scene[asset_cfg.name].data.site_lin_vel_w[:, asset_cfg.site_ids, :2]
@@ -3034,7 +3190,8 @@ def feet_surface_slip(recipe, sensor_name, command_name, command_threshold, asse
     recipe.extras["log"]["Metrics/world_slip_velocity_mean"] = (world_squared.sqrt() * contact).sum() / count
     soft = data.soft_found > 0
     soft_speed = (data.soft_slip_squared_sum / data.soft_found.clamp_min(1)).sqrt()
-    recipe.extras["log"]["Metrics/pad_relative_slip_velocity_mean"] = soft_speed.sum() / soft.sum().clamp_min(1)
+    surface = "cloth" if _is_cloth(recipe) else "pad"
+    recipe.extras["log"][f"Metrics/{surface}_relative_slip_velocity_mean"] = soft_speed.sum() / soft.sum().clamp_min(1)
     return squared.sum(-1) * active
 
 

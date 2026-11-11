@@ -10,6 +10,17 @@ __pycache__/
 .Python
 build/
 assets/
+!/examples/microduck/assets/
+/examples/microduck/assets/*
+!/examples/microduck/assets/swing/
+/examples/microduck/assets/swing/*
+!/examples/microduck/assets/swing/*.stl
+!/examples/microduck/assets/swing/LICENSE
+!/examples/microduck/assets/swing/source.json
+!/examples/microduck/assets/basketball/
+/examples/microduck/assets/basketball/*
+!/examples/microduck/assets/basketball/LICENSE
+!/examples/microduck/assets/basketball/NOTICE
 develop-eggs/
 dist/
 downloads/

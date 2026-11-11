@@ -46,14 +46,16 @@ def joint_coordinates(robot):
     return coordinates
 
 
-def build_robot(builder_type=newton.ModelBuilder, *, enable_self_collisions=False, task="velocity"):
+def build_robot(builder_type=newton.ModelBuilder, *, enable_self_collisions=False, task="velocity", asset=None):
     robot = builder_type(up_axis=newton.Axis.Z)
     # Preserve ground/ball filtering independently of robot self-collision detection.
     newton.solvers.SolverMuJoCo.register_custom_attributes(robot)
     # Both backends import the full collision asset and its authored MuJoCo masks/excludes.
     # Visual duplicates stay non-colliding; enabling them would double the contact geometry.
     family = base_task(task)
-    if family in ROLLER_TASKS:
+    if asset is not None:
+        asset = Path(asset)
+    elif family in ROLLER_TASKS:
         asset = ASSET.with_name("robot_groundcontact_rollers.xml")
     elif enable_self_collisions or family in ("velstand", "ballkick"):
         asset = ASSET.with_name("robot_allcollisions.xml")

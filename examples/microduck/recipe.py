@@ -97,6 +97,11 @@ class OfficialRecipe:
     def __init__(self, env, robot):
         snapshot = json.loads(SNAPSHOT.read_text())
         self.spec = snapshot["tasks"][env.task]
+        # Narrow supports need commands aligned with their usable walking direction.
+        terrain_kind = getattr(env.terrain, "kind", None)
+        scene_overrides = self.spec.get("terrain_overrides", {}).get(terrain_kind, {})
+        for section, terms in scene_overrides.items():
+            self.spec[section].update(terms)
         self.env = env
         self.robot = RobotView()
         self.robot.joint_names = env.joint_names
@@ -226,6 +231,7 @@ class OfficialRecipe:
             "interval_events": list(self.pushes.events),
             "source_sha256": snapshot["source_sha256"],
             "recipe_fingerprint": recipe_fingerprint(),
+            "terrain_overrides": scene_overrides,
             "supported_rewards": self.supported,
             "omitted_rewards": self.omitted,
             "local_rewards": {

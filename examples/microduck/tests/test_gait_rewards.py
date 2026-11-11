@@ -62,7 +62,7 @@ def test_standing_contact_prefers_both_feet_even_when_a_raised_foot_is_motionles
     recipe.env.commands[9, :2] = 0.008  # Combined translation exceeds the standing threshold.
     cost = recipe.base_reward(term["func"], term["params"])
     torch.testing.assert_close(cost, torch.tensor([0., 1., 1., 2., 0., 0., 0., 0., 1., 0.]))
-    assert (cost[0] * term["weight"]) > (cost[1] * term["weight"]) > (cost[3] * term["weight"])
+    assert cost[0] < cost[1] < cost[3]
     # Foot-speed shaping alone cannot distinguish these stationary support patterns.
     motion_params = json.loads(SNAPSHOT.read_text())["tasks"]["velocity"]["rewards"]["standing_foot_motion"]["params"]
     assert not recipe.base_reward("standing_foot_motion_penalty", motion_params).any()
@@ -104,9 +104,10 @@ def test_local_gait_rewards_scope_and_negative_weights():
     tasks = json.loads(SNAPSHOT.read_text())["tasks"]
     for name in ("standing_foot_motion", "straight_foot_heading", "standing_foot_contact"):
         term = tasks["velocity"]["rewards"][name]
-        assert term["weight"] < 0 and term["local"] is True
+        assert term["local"] is True
+        assert term["weight"] == (-0.015 if name == "straight_foot_heading" else 0)
         assert all(
-            name not in spec["rewards"] for task, spec in tasks.items() if task != "velocity"
+            name not in spec["rewards"] for task, spec in tasks.items() if task not in ("velocity", "velstand")
         )
 
 
@@ -131,7 +132,7 @@ def test_hip_roll_cost_targets_only_roll_and_still_distinguishes_large_deviation
     # Even near the observed limit posture, a small correction must improve the reward.
     assert (costs[4] * term["weight"]) > (costs[3] * term["weight"])
     for task, spec in json.loads(SNAPSHOT.read_text())["tasks"].items():
-        if task != "velocity":
+        if task not in ("velocity", "velstand"):
             assert not spec["rewards"].get("hip_roll_neutral", {}).get("local", False)
 
 
@@ -260,6 +261,9 @@ def test_gait_terms_registered_logged_and_reset_safe(device):
         _, reward, _, extras = env.step(torch.zeros_like(env.actions))
         assert torch.isfinite(reward).all()
         for name in names:
+            if name in ("standing_foot_motion", "standing_foot_contact"):
+                assert "Task/" + name not in extras["log"]
+                continue
             assert torch.isfinite(extras["log"]["Task/" + name])
             assert extras["log"]["Task/" + name] <= 0
         previous_q = env._views()[0].clone()

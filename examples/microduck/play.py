@@ -20,6 +20,14 @@ from examples.microduck.policy_spec import HOME
 HEAD_UP_COMMAND = (-HOME[5], -HOME[6], 0.0, 0.0)
 
 
+def manual_reset_requested(viewer, keys):
+    """Consume a rising edge so holding R never repeatedly resets simulation state."""
+    down = bool(viewer is not None and viewer.is_key_down("r"))
+    requested = down and not keys.get("reset", False)
+    keys["reset"] = down
+    return requested
+
+
 def configure_playback_boundaries(env):
     if env.mixed_terrain:
         # Crossing the pad edge is observable in playback; training keeps its surface-only curriculum.
@@ -161,12 +169,15 @@ def run_walk(args):
     try:
         example = Example(viewer, original_args)
         print(f"Official walk.onnx: solver={args.solver}, graph={example.graph is not None}, physics=original example")
-        print("Press I/K: forward/back; J/L: lateral; U/O: turn; P: reset pose. Release keeps the velocity command.")
+        print("Press I/K: forward/back; J/L: lateral; U/O: turn; R: reset all environments (P also supported).")
+        keys = {}
         previous_command = None
         measured_start = time.monotonic()
-        for _ in range(args.num_frames):
+        while frames < args.num_frames:
             if not viewer.is_running():
                 break
+            if manual_reset_requested(viewer, keys):
+                example.reset()
             if viewer.is_paused():
                 example.render()
                 continue
@@ -207,13 +218,16 @@ def run_walk_on_pad(args):
             viewer.set_camera(pos=wp.vec3(0.8, -1.0, 0.72), pitch=-26.0, yaw=129.0)
             viewer.renderer.set_title("MicroDuck | Official walk.onnx | Soft pad")
         print("Official walk.onnx on current soft-pad physics (50 Hz, shared position PD).", flush=True)
-        print("I/K: forward/back; J/L: lateral; U/O: turn; X: stop. Space: pause.", flush=True)
+        print("I/K: forward/back; J/L: lateral; U/O: turn; X: stop; R: reset all environments. Space: pause.", flush=True)
         command, keys, previous = list(args.command), {}, None
         frames = 0
         with torch.inference_mode():
             while frames < args.num_frames:
                 if viewer is not None and not viewer.is_running():
                     break
+                if manual_reset_requested(viewer, keys):
+                    env.reset()
+                    policy.reset()
                 if viewer is not None and viewer.is_paused():
                     env.render()
                     time.sleep(0.02)
@@ -230,10 +244,7 @@ def run_walk_on_pad(args):
                     q[0, env.qi].cpu().numpy(), qd[0, env.qdi].cpu().numpy(), command,
                 )
                 actions = torch.as_tensor(target, device=env.device).unsqueeze(0) - env.home
-                resets = env.total_resets
                 env.step_playback(actions)
-                if env.total_resets != resets:
-                    policy.reset()
                 frames += 1
                 if viewer is not None and not args.benchmark:
                     time.sleep(max(0.0, env.step_dt - (time.monotonic() - start)))
@@ -245,6 +256,18 @@ def run_walk_on_pad(args):
 
 def main(argv=None):
     args, _training_config, play_cfg = setup("play", argv)
+    heading_hold = getattr(args, "heading_hold", False)
+    adaptive_forward = getattr(args, "adaptive_forward", False)
+    if adaptive_forward and not heading_hold:
+        raise ValueError("--adaptive-forward requires --heading-hold")
+    if heading_hold and (args.policy == "walk" or args.num_envs != 1 or args.task != "velocity"
+                         or args.command[0] <= 0 or any(args.command[1:])):
+        raise ValueError("--heading-hold requires one Velocity checkpoint with positive forward and zero lateral/yaw command")
+    if args.record_dir and (args.policy == "walk" or args.num_envs != 1
+                            or args.terrain not in ("mixed_soft_pad", "cloth")):
+        raise ValueError("--record-dir requires a single-environment soft-pad or cloth checkpoint replay")
+    if args.record_until_pad_edge and not args.record_dir:
+        raise ValueError("--record-until-pad-edge requires --record-dir")
     if args.policy == "walk":
         return run_walk(args)
     env = create_env(args)
@@ -255,6 +278,7 @@ def main(argv=None):
     print("Playback actor observation noise: disabled", flush=True)
     print("Playback training interval events: disabled (including random velocity pushes)", flush=True)
     viewer = env.viewer
+    recorder = None
     try:
         from examples.microduck.ppo import create_runner
 
@@ -266,6 +290,7 @@ def main(argv=None):
             env.reset()
         # RSL-RL's inference wrapper restores and applies the saved observation normalizer.
         policy = runner.get_inference_policy(device=args.device)
+        print("Automatic resets disabled. R: reset all environments, including while paused.", flush=True)
         if viewer is not None and env.family in ("velocity", "velstand"):
             print(
                 "Press I/K: forward/back; J/L: lateral; U/O: turn. Each press adds one increment; release keeps it.", flush=True
@@ -275,18 +300,47 @@ def main(argv=None):
         key_was_down = {}
         command = list(args.command)
         frames = 0
+        reached_edge = False
         warmup = min(20, args.num_frames // 4)
         measured_start = time.monotonic()
         obs, _ = env.get_observations()
+        steering = None
+        if heading_hold:
+            from examples.microduck.heading_control import HeadingHold, ProgressHold
+
+            steering_class = ProgressHold if adaptive_forward else HeadingHold
+            steering_options = ({"nominal_forward": command[0], "target_speed": args.target_forward_speed}
+                                if adaptive_forward else {})
+            steering = steering_class(env._views()[2][0].cpu().tolist(), args.heading_max_yaw, **steering_options)
+            print(f"Pose feedback enabled: adaptive_forward={adaptive_forward}; policy commands only.", flush=True)
+        if args.record_dir:
+            from demos.microduck_soft_pad.recording import PlaybackRecording
+
+            recorder = PlaybackRecording(env, args)
         with torch.inference_mode():
-            for _ in range(args.num_frames):
+            while frames < args.num_frames:
                 if viewer is not None and not viewer.is_running():
                     break
+                if manual_reset_requested(viewer, key_was_down):
+                    env.reset()
+                    obs, _ = env.get_observations()
+                    if steering is not None:
+                        steering = steering_class(env._views()[2][0].cpu().tolist(), args.heading_max_yaw, **steering_options)
+                if viewer is not None and viewer.is_paused():
+                    env.render()
+                    time.sleep(0.02)
+                    continue
                 start = time.monotonic()
                 if frames == warmup:
                     measured_start = start
                 if env.family in ("velocity", "velstand"):
                     previous_command = update_velocity_command(env, viewer, command, key_was_down, previous_command)
+                if steering is not None:
+                    pose = env._views()[2][0].cpu().tolist()
+                    if adaptive_forward:
+                        env.commands[0, 0], env.commands[0, 2] = steering.update_commands(pose, env.step_dt)
+                    else:
+                        env.commands[0, 2] = steering.update(pose, command[0], env.step_dt)
                 update_playback_observation(env, obs)
                 actions = policy(obs)
                 if args.diagnostics and frames == 0:
@@ -301,7 +355,13 @@ def main(argv=None):
                         flush=True,
                     )
                 obs = playback.step(actions)
+                if recorder is not None:
+                    recorder.sample()
                 frames += 1
+                if recorder is not None and args.record_until_pad_edge and recorder.reached_pad_edge():
+                    reached_edge = True
+                    print(f"Recording stopped at the soft-pad edge after {frames} frames", flush=True)
+                    break
                 if args.diagnostics and (frames == 1 or frames % 100 == 0):
                     _, _, _, linear, angular, _ = env._kinematics()
                     print(
@@ -322,8 +382,12 @@ def main(argv=None):
             f"Policy playback complete: frames={frames}, resets={env.total_resets}, checkpoint={args.checkpoint}",
             flush=True,
         )
+        if recorder is not None:
+            recorder.close(completed=frames == args.num_frames or reached_edge)
         wait_for_viewer_close(viewer, args.keep_open)
     finally:
+        if recorder is not None:
+            recorder.close(completed=False)
         env.close()
     return 0
 

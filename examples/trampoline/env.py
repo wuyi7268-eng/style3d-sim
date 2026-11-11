@@ -398,9 +398,7 @@ class TrampolineEnv:
             if "/ankle_roll_link/collisions/" in scene.shape_label[shape_index]:
                 scene.shape_margin[shape_index] = foot_contact_margin
 
-        obj_path = (
-            Path(__file__).resolve().parents[2] / "assets" / "trampoline_v1051.obj"
-        )
+        obj_path = Path(s3d.get_asset("models/trampoline/trampoline_v1051.obj"))
         vertices, indices = load_obj_triangles(obj_path)
         trampoline_start = len(scene.particle_q)
         style3d.add_cloth_mesh(

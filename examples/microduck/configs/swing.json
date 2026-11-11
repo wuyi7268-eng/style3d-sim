@@ -1,0 +1,269 @@
+{
+  "contract": "synreal_swing_v1",
+  "source_revision": "c5fcc50219fef01ac9931d0079c583ccbb29b689",
+  "episode_s": 24.0,
+  "action_scale": 0.7,
+  "geometry": {
+    "length": 0.38,
+    "hang_length": 0.3822,
+    "anchor_height": 0.75,
+    "attachment_y": 0.088,
+    "attachment_z": 0.085,
+    "stiffness": 2000.0,
+    "limit": 0.395,
+    "limit_stiffness": 20000.0
+  },
+  "physics": {
+    "physics_dt": 0.001,
+    "decimation": 20,
+    "joint_constraint_primal_iterations": 4
+  },
+  "noise": {
+    "angular": 0.02,
+    "gravity": 0.006,
+    "position": 0.001,
+    "velocity": 0.15,
+    "encoder_bias": 0.01
+  },
+  "rewards": {
+    "swing_peak_progress": {
+      "weight": 224.0,
+      "params": {
+        "target_angle": 3.141592653589793,
+        "max_paid_rate": 8.0,
+        "frontier_power": 2.0
+      }
+    },
+    "swing_height": {
+      "weight": 8.0,
+      "params": {}
+    },
+    "swing_late_height": {
+      "weight": 24.0,
+      "params": {
+        "time_power": 2.0
+      }
+    },
+    "swing_energy": {
+      "weight": 0.5,
+      "params": {
+        "max_equivalent_height": 2.0
+      }
+    },
+    "swing_lateral": {
+      "weight": -3.0,
+      "params": {
+        "tolerance_m": 0.03
+      }
+    },
+    "swing_lateral_barrier": {
+      "weight": -8.0,
+      "params": {
+        "safe_m": 0.012,
+        "scale_m": 0.008
+      }
+    },
+    "swing_lateral_velocity": {
+      "weight": -3.0,
+      "params": {
+        "tolerance_m_s": 0.1
+      }
+    },
+    "swing_out_of_plane_angular_velocity": {
+      "weight": -1.0,
+      "params": {
+        "tolerance_rad_s": 1.5
+      }
+    },
+    "swing_alignment": {
+      "weight": -18.0,
+      "params": {}
+    },
+    "swing_alignment_barrier": {
+      "weight": -4.0,
+      "params": {
+        "safe_penalty": 0.04,
+        "scale": 0.01
+      }
+    },
+    "swing_predictive_geometry_barrier": {
+      "weight": -6.0,
+      "params": {
+        "horizon_s": 0.08,
+        "lateral_safe_m": 0.012,
+        "lateral_scale_m": 0.008,
+        "alignment_safe_penalty": 0.04,
+        "alignment_scale": 0.01,
+        "max_penalty": 16.0
+      }
+    },
+    "string_slack": {
+      "weight": -8.0,
+      "params": {}
+    },
+    "string_extension_barrier": {
+      "weight": -12.0,
+      "params": {
+        "safe_length_m": 0.392,
+        "scale_m": 0.002,
+        "max_penalty": 16.0
+      }
+    },
+    "invalid_episode_debt": {
+      "weight": -10.0,
+      "params": {}
+    },
+    "dof_pos_limits": {
+      "weight": -1.0,
+      "params": {}
+    },
+    "action_rate_l2": {
+      "weight": -0.03,
+      "params": {}
+    },
+    "joint_torques_l2": {
+      "weight": -0.001,
+      "params": {}
+    }
+  },
+  "curriculum": {
+    "swing_peak_progress": [
+      {
+        "step": 0,
+        "weight": 224.0
+      },
+      {
+        "step": 120000,
+        "weight": 192.0
+      },
+      {
+        "step": 192000,
+        "weight": 160.0
+      }
+    ],
+    "swing_height": [
+      {
+        "step": 0,
+        "weight": 8.0
+      },
+      {
+        "step": 48000,
+        "weight": 12.0
+      },
+      {
+        "step": 120000,
+        "weight": 16.0
+      }
+    ],
+    "swing_energy": [
+      {
+        "step": 0,
+        "weight": 0.5
+      },
+      {
+        "step": 120000,
+        "weight": 0.25
+      }
+    ],
+    "action_rate_l2": [
+      {
+        "step": 0,
+        "weight": -0.03
+      },
+      {
+        "step": 144000,
+        "weight": -0.04
+      },
+      {
+        "step": 192000,
+        "weight": -0.05
+      }
+    ],
+    "swing_lateral": [
+      {
+        "step": 0,
+        "weight": -3.0
+      },
+      {
+        "step": 96000,
+        "weight": -4.0
+      },
+      {
+        "step": 120000,
+        "weight": -5.0
+      },
+      {
+        "step": 144000,
+        "weight": -6.0
+      }
+    ],
+    "swing_alignment": [
+      {
+        "step": 0,
+        "weight": -18.0
+      },
+      {
+        "step": 96000,
+        "weight": -24.0
+      },
+      {
+        "step": 120000,
+        "weight": -30.0
+      },
+      {
+        "step": 144000,
+        "weight": -36.0
+      }
+    ],
+    "string_slack": [
+      {
+        "step": 0,
+        "weight": -8.0
+      },
+      {
+        "step": 96000,
+        "weight": -10.0
+      },
+      {
+        "step": 120000,
+        "weight": -12.0
+      },
+      {
+        "step": 144000,
+        "weight": -15.0
+      }
+    ]
+  },
+  "ppo": {
+    "num_steps_per_env": 48,
+    "save_interval": 250,
+    "policy": {
+      "init_noise_std": 0.1
+    },
+    "algorithm": {
+      "clip_param": 0.1,
+      "entropy_coef": 0.002,
+      "num_learning_epochs": 3,
+      "learning_rate": 0.0001,
+      "schedule": "fixed",
+      "gamma": 0.995,
+      "desired_kl": 0.005
+    }
+  },
+  "joint_reference": [
+    0,
+    0,
+    -0.4079,
+    1.35,
+    0,
+    0.3491,
+    0.3491,
+    0,
+    0,
+    0,
+    0,
+    0.4079,
+    -1.35,
+    0
+  ]
+}

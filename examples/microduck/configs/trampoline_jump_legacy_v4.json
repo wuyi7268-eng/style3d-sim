@@ -1,0 +1,78 @@
+{
+  "contract": "trampoline_max_height_v1",
+  "task": {
+    "shaping_version": 4,
+    "continuous_bounce": true,
+    "prepare_relative_speed": 0.15,
+    "prepare_angular_speed": 1.2,
+    "prepare_tilt_deg": 20.0,
+    "prepare_timeout_s": 3.0,
+    "crouch_target": 0.02,
+    "push_min_compression": 0.003,
+    "push_min_crouch": 0.005,
+    "push_extension_speed": 0.02,
+    "launch_velocity_cap": 0.5,
+    "settle_s": 0.2,
+    "hold_s": 0.4,
+    "takeoff_timeout_s": 2.5,
+    "episode_s": 6.0,
+    "minimum_air_s": 0.04,
+    "touchdown_window_s": 0.06,
+    "stable_tilt_deg": 15.0,
+    "failure_tilt_deg": 65.0,
+    "stable_speed": 0.12,
+    "stable_angular_speed": 0.8,
+    "stable_root_height": 0.08,
+    "maximum_drift": 0.15,
+    "compression_target": 0.025,
+    "action_scale": 0.5,
+    "history_length": 20,
+    "launch_tilt_deg": 35.0,
+    "launch_angular_speed": 3.0,
+    "height_reward_scale": 0.05
+  },
+  "rewards": {
+    "prepare": 0.25,
+    "crouch": 0.25,
+    "push": 0.75,
+    "launch_velocity": 2.0,
+    "apex_progress": 3.0,
+    "upright": 0.2,
+    "stable": 0.5,
+    "compression": 0.5,
+    "launch": 1.0,
+    "apex": 0.0,
+    "landing": 1.0,
+    "success": 8.0,
+    "failure": -3.0,
+    "horizontal_speed": -0.15,
+    "angular_speed": -0.02,
+    "slip": -0.1,
+    "torque": -0.002,
+    "action_rate": -0.02,
+    "landing_stability": 2.0
+  },
+  "ppo": {
+    "num_steps_per_env": 64,
+    "save_interval": 100,
+    "policy": {
+      "actor_hidden_dims": [
+        256,
+        256,
+        128
+      ],
+      "critic_hidden_dims": [
+        256,
+        256,
+        128
+      ],
+      "init_noise_std": 0.3
+    },
+    "algorithm": {
+      "learning_rate": 0.0003,
+      "gamma": 0.995,
+      "lam": 0.95,
+      "entropy_coef": 0.005
+    }
+  }
+}

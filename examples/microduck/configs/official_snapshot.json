@@ -72901,7 +72901,8 @@
               "preserve_order": false
             }
           },
-          "weight": -0.05
+          "weight": -0.05,
+          "local": true
         },
         "angular_momentum": {
           "func": "mjlab.tasks.velocity.mdp.rewards.angular_momentum_penalty",
@@ -73270,7 +73271,7 @@
               "support_window_s": 0.08
             }
           },
-          "weight": 0.15,
+          "weight": 0.0,
           "local": true
         },
         "self_collisions": {
@@ -73328,7 +73329,8 @@
             "std": 0.35,
             "command_name": "twist"
           },
-          "weight": 2.0
+          "weight": 1.0,
+          "local": true
         },
         "upright_progress": {
           "func": "mjlab_microduck.tasks.mdp.upright_progress",
@@ -73856,7 +73858,7 @@
         "neck_action_rate": {
           "func": "mjlab_microduck.tasks.mdp.neck_action_rate_l2",
           "params": {},
-          "weight": -0.05,
+          "weight": -0.025,
           "local": true
         },
         "head_angular_velocity": {
@@ -73871,7 +73873,7 @@
             "command_grace_s": 0.3,
             "command_ramp_s": 0.2
           },
-          "weight": -0.05,
+          "weight": -0.025,
           "local": true
         },
         "gait_cadence": {
@@ -73949,6 +73951,106 @@
               "support_window_s": 0.08
             }
           }
+        },
+        "foot_swing_progress": {
+          "func": "commanded_foot_swing_progress",
+          "weight": 0.0,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "height_sensor_name": "foot_height_scan",
+            "command_name": "twist",
+            "cadence": {
+              "base_frequency": 3.0,
+              "speed_gain": 5.0,
+              "yaw_gain": 1.0,
+              "min_frequency": 3.0,
+              "max_frequency": 6.0,
+              "linear_threshold": 0.01,
+              "angular_threshold": 0.01,
+              "min_height": 0.09,
+              "max_tilt_deg": 35.0,
+              "command_change_threshold": 0.01,
+              "min_air_s": 0.06,
+              "min_contact_s": 0.03,
+              "min_clearance": 0.008,
+              "interval_tolerance": 0.15,
+              "interval_std": 0.25,
+              "overdue_ratio": 1.5,
+              "grace_s": 0.3,
+              "ramp_s": 0.3,
+              "yaw_speed_scale": 0.1,
+              "tracking_std": 0.2,
+              "air_fraction_min": 0.25,
+              "air_fraction_max": 0.6,
+              "placement_time_fraction": 0.72,
+              "placement_time_min": 0.12,
+              "placement_time_max": 0.24,
+              "support_window_s": 0.08
+            },
+            "advance_time_fraction": 0.6,
+            "min_advance": 0.008,
+            "max_advance": 0.05,
+            "freshness_cycles": 1.5
+          },
+          "local": true
+        },
+        "standing_foot_motion": {
+          "func": "standing_foot_motion_penalty",
+          "weight": 0.0,
+          "params": {
+            "linear_threshold": 0.01,
+            "angular_threshold": 0.01,
+            "max_tilt_deg": 35.0
+          },
+          "local": true
+        },
+        "standing_foot_contact": {
+          "func": "standing_foot_contact_penalty",
+          "weight": 0.0,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "linear_threshold": 0.01,
+            "angular_threshold": 0.01,
+            "max_tilt_deg": 35.0
+          },
+          "local": true
+        },
+        "vertical_body_velocity": {
+          "func": "vertical_body_velocity_penalty",
+          "weight": 0.0,
+          "params": {},
+          "local": true
+        },
+        "hip_roll_neutral": {
+          "func": "mjlab_microduck.tasks.mdp.joint_deviation_l1",
+          "weight": -0.015,
+          "params": {
+            "asset_cfg": {
+              "name": "robot",
+              "joint_names": [
+                ".*hip_roll.*"
+              ],
+              "joint_ids": {
+                "slice": [
+                  null,
+                  null,
+                  null
+                ]
+              }
+            }
+          },
+          "local": true
+        },
+        "straight_foot_heading": {
+          "func": "straight_foot_heading_penalty",
+          "weight": -0.015,
+          "params": {
+            "tolerance_deg": 5.0,
+            "angular_threshold": 0.1,
+            "lateral_threshold": 0.05,
+            "max_tilt_deg": 35.0
+          },
+          "local": true
         }
       },
       "curricula": {
@@ -74383,6 +74485,171 @@
               }
             ]
           }
+        },
+        "hip_roll_neutral_weight": {
+          "func": "mjlab_microduck.tasks.mdp.reward_weight",
+          "params": {
+            "reward_name": "hip_roll_neutral",
+            "weight_stages": [
+              {
+                "step": 0,
+                "weight": -0.015
+              },
+              {
+                "step": 24000,
+                "weight": -0.03
+              },
+              {
+                "step": 36000,
+                "weight": -0.06
+              },
+              {
+                "step": 48000,
+                "weight": -0.09
+              },
+              {
+                "step": 60000,
+                "weight": -0.12
+              },
+              {
+                "step": 72000,
+                "weight": -0.15
+              }
+            ]
+          },
+          "local": true
+        },
+        "straight_foot_heading_weight": {
+          "func": "mjlab_microduck.tasks.mdp.reward_weight",
+          "params": {
+            "reward_name": "straight_foot_heading",
+            "weight_stages": [
+              {
+                "step": 0,
+                "weight": -0.015
+              },
+              {
+                "step": 24000,
+                "weight": -0.03
+              },
+              {
+                "step": 36000,
+                "weight": -0.06
+              },
+              {
+                "step": 48000,
+                "weight": -0.09
+              },
+              {
+                "step": 60000,
+                "weight": -0.12
+              },
+              {
+                "step": 72000,
+                "weight": -0.15
+              }
+            ]
+          },
+          "local": true
+        },
+        "standing_foot_motion_weight": {
+          "func": "mjlab_microduck.tasks.mdp.reward_weight",
+          "params": {
+            "reward_name": "standing_foot_motion",
+            "weight_stages": [
+              {
+                "step": 0,
+                "weight": 0.0
+              },
+              {
+                "step": 24000,
+                "weight": 0.0
+              },
+              {
+                "step": 36000,
+                "weight": 0.0
+              },
+              {
+                "step": 48000,
+                "weight": 0.0
+              },
+              {
+                "step": 60000,
+                "weight": 0.0
+              },
+              {
+                "step": 72000,
+                "weight": 0.0
+              }
+            ]
+          },
+          "local": true
+        },
+        "standing_foot_contact_weight": {
+          "func": "mjlab_microduck.tasks.mdp.reward_weight",
+          "params": {
+            "reward_name": "standing_foot_contact",
+            "weight_stages": [
+              {
+                "step": 0,
+                "weight": 0.0
+              },
+              {
+                "step": 24000,
+                "weight": 0.0
+              },
+              {
+                "step": 36000,
+                "weight": 0.0
+              },
+              {
+                "step": 48000,
+                "weight": 0.0
+              },
+              {
+                "step": 60000,
+                "weight": 0.0
+              },
+              {
+                "step": 72000,
+                "weight": 0.0
+              }
+            ]
+          },
+          "local": true
+        },
+        "vertical_body_velocity_weight": {
+          "func": "mjlab_microduck.tasks.mdp.reward_weight",
+          "params": {
+            "reward_name": "vertical_body_velocity",
+            "weight_stages": [
+              {
+                "step": 0,
+                "weight": 0.0
+              },
+              {
+                "step": 24000,
+                "weight": 0.0
+              },
+              {
+                "step": 36000,
+                "weight": 0.0
+              },
+              {
+                "step": 48000,
+                "weight": 0.0
+              },
+              {
+                "step": 60000,
+                "weight": 0.0
+              },
+              {
+                "step": 72000,
+                "weight": 0.0
+              }
+            ]
+          },
+          "local": true
         }
       },
       "commands": {
@@ -92525,7 +92792,7 @@
               "preserve_order": false
             }
           },
-          "weight": -0.15
+          "weight": -0.05
         },
         "angular_momentum": {
           "func": "mjlab.tasks.velocity.mdp.rewards.angular_momentum_penalty",
@@ -92577,7 +92844,17 @@
               "placement_time_fraction": 0.72,
               "placement_time_min": 0.12,
               "placement_time_max": 0.24,
-              "support_window_s": 0.08
+              "support_window_s": 0.08,
+              "soft_pad_motion": {
+                "exploration_floor": 0.25,
+                "yaw_std": 0.35,
+                "lateral_std": 0.08
+              },
+              "cloth_motion": {
+                "exploration_floor": 0.25,
+                "yaw_std": 0.35,
+                "lateral_std": 0.08
+              }
             }
           }
         },
@@ -92706,7 +92983,17 @@
               "placement_time_fraction": 0.72,
               "placement_time_min": 0.12,
               "placement_time_max": 0.24,
-              "support_window_s": 0.08
+              "support_window_s": 0.08,
+              "soft_pad_motion": {
+                "exploration_floor": 0.25,
+                "yaw_std": 0.35,
+                "lateral_std": 0.08
+              },
+              "cloth_motion": {
+                "exploration_floor": 0.25,
+                "yaw_std": 0.35,
+                "lateral_std": 0.08
+              }
             }
           },
           "weight": 2.0,
@@ -92750,7 +93037,17 @@
               "placement_time_fraction": 0.72,
               "placement_time_min": 0.12,
               "placement_time_max": 0.24,
-              "support_window_s": 0.08
+              "support_window_s": 0.08,
+              "soft_pad_motion": {
+                "exploration_floor": 0.25,
+                "yaw_std": 0.35,
+                "lateral_std": 0.08
+              },
+              "cloth_motion": {
+                "exploration_floor": 0.25,
+                "yaw_std": 0.35,
+                "lateral_std": 0.08
+              }
             }
           },
           "weight": 0.25,
@@ -92889,10 +93186,20 @@
               "placement_time_fraction": 0.72,
               "placement_time_min": 0.12,
               "placement_time_max": 0.24,
-              "support_window_s": 0.08
+              "support_window_s": 0.08,
+              "soft_pad_motion": {
+                "exploration_floor": 0.25,
+                "yaw_std": 0.35,
+                "lateral_std": 0.08
+              },
+              "cloth_motion": {
+                "exploration_floor": 0.25,
+                "yaw_std": 0.35,
+                "lateral_std": 0.08
+              }
             }
           },
-          "weight": 0.15,
+          "weight": 0.0,
           "local": true
         },
         "self_collisions": {
@@ -92934,13 +93241,13 @@
         },
         "vertical_body_velocity": {
           "func": "vertical_body_velocity_penalty",
-          "weight": -1.0,
+          "weight": 0.0,
           "params": {},
           "local": true
         },
         "standing_foot_motion": {
           "func": "standing_foot_motion_penalty",
-          "weight": -1.5,
+          "weight": 0.0,
           "params": {
             "linear_threshold": 0.01,
             "angular_threshold": 0.01,
@@ -92950,7 +93257,7 @@
         },
         "standing_foot_contact": {
           "func": "standing_foot_contact_penalty",
-          "weight": -0.5,
+          "weight": 0.0,
           "params": {
             "sensor_name": "feet_ground_contact",
             "linear_threshold": 0.01,
@@ -92961,7 +93268,7 @@
         },
         "hip_roll_neutral": {
           "func": "mjlab_microduck.tasks.mdp.joint_deviation_l1",
-          "weight": -1.0,
+          "weight": -0.015,
           "params": {
             "asset_cfg": {
               "name": "robot",
@@ -92990,7 +93297,7 @@
         },
         "straight_foot_heading": {
           "func": "straight_foot_heading_penalty",
-          "weight": -1.5,
+          "weight": -0.015,
           "params": {
             "tolerance_deg": 5.0,
             "angular_threshold": 0.1,
@@ -93022,7 +93329,7 @@
         "neck_action_rate": {
           "func": "mjlab_microduck.tasks.mdp.neck_action_rate_l2",
           "params": {},
-          "weight": -0.05,
+          "weight": -0.025,
           "local": true
         },
         "head_angular_velocity": {
@@ -93037,12 +93344,12 @@
             "command_grace_s": 0.3,
             "command_ramp_s": 0.2
           },
-          "weight": -0.05,
+          "weight": -0.025,
           "local": true
         },
         "gait_cadence": {
           "func": "commanded_gait_cadence",
-          "weight": 0.5,
+          "weight": 0.0,
           "local": true,
           "params": {
             "sensor_name": "feet_ground_contact",
@@ -93074,13 +93381,23 @@
               "placement_time_fraction": 0.72,
               "placement_time_min": 0.12,
               "placement_time_max": 0.24,
-              "support_window_s": 0.08
+              "support_window_s": 0.08,
+              "soft_pad_motion": {
+                "exploration_floor": 0.25,
+                "yaw_std": 0.35,
+                "lateral_std": 0.08
+              },
+              "cloth_motion": {
+                "exploration_floor": 0.25,
+                "yaw_std": 0.35,
+                "lateral_std": 0.08
+              }
             }
           }
         },
         "gait_overdue": {
           "func": "commanded_gait_overdue",
-          "weight": -0.1,
+          "weight": 0.0,
           "local": true,
           "params": {
             "sensor_name": "feet_ground_contact",
@@ -93112,13 +93429,23 @@
               "placement_time_fraction": 0.72,
               "placement_time_min": 0.12,
               "placement_time_max": 0.24,
-              "support_window_s": 0.08
+              "support_window_s": 0.08,
+              "soft_pad_motion": {
+                "exploration_floor": 0.25,
+                "yaw_std": 0.35,
+                "lateral_std": 0.08
+              },
+              "cloth_motion": {
+                "exploration_floor": 0.25,
+                "yaw_std": 0.35,
+                "lateral_std": 0.08
+              }
             }
           }
         },
         "foot_swing_progress": {
           "func": "commanded_foot_swing_progress",
-          "weight": 0.5,
+          "weight": 0.0,
           "params": {
             "sensor_name": "feet_ground_contact",
             "height_sensor_name": "foot_height_scan",
@@ -93149,7 +93476,17 @@
               "placement_time_fraction": 0.72,
               "placement_time_min": 0.12,
               "placement_time_max": 0.24,
-              "support_window_s": 0.08
+              "support_window_s": 0.08,
+              "soft_pad_motion": {
+                "exploration_floor": 0.25,
+                "yaw_std": 0.35,
+                "lateral_std": 0.08
+              },
+              "cloth_motion": {
+                "exploration_floor": 0.25,
+                "yaw_std": 0.35,
+                "lateral_std": 0.08
+              }
             },
             "advance_time_fraction": 0.6,
             "min_advance": 0.008,
@@ -93157,6 +93494,90 @@
             "freshness_cycles": 1.5
           },
           "local": true
+        },
+        "track_yaw_fine": {
+          "func": "mjlab_microduck.tasks.mdp.track_yaw_rate_fine",
+          "params": {
+            "std": 0.35,
+            "command_name": "twist"
+          },
+          "weight": 1.0,
+          "local": true
+        },
+        "soft_pad_velocity": {
+          "func": "soft_pad_velocity_tracking",
+          "weight": 2.0,
+          "local": true,
+          "params": {
+            "command_name": "twist",
+            "min_std": 0.04,
+            "relative_std": 0.5,
+            "max_std": 0.12,
+            "yaw_std": 0.35,
+            "command_threshold": 0.01,
+            "max_tilt_deg": 35.0,
+            "broad_fraction": 0.25
+          }
+        },
+        "cloth_velocity": {
+          "func": "cloth_velocity_tracking",
+          "weight": 2.0,
+          "local": true,
+          "params": {
+            "command_name": "twist",
+            "min_std": 0.04,
+            "relative_std": 0.5,
+            "max_std": 0.12,
+            "yaw_std": 0.35,
+            "command_threshold": 0.01,
+            "max_tilt_deg": 35.0,
+            "min_height": 0.09,
+            "broad_fraction": 0.25
+          }
+        },
+        "cloth_command_progress": {
+          "func": "cloth_command_progress",
+          "weight": 2.5,
+          "local": true,
+          "params": {
+            "command_name": "twist",
+            "command_threshold": 0.03,
+            "max_tilt_deg": 35.0,
+            "min_height": 0.09,
+            "lateral_std": 0.1,
+            "yaw_std": 0.35
+          }
+        },
+        "cloth_stall": {
+          "func": "cloth_stall_penalty",
+          "weight": -1.0,
+          "local": true,
+          "params": {
+            "command_name": "twist",
+            "command_threshold": 0.03,
+            "max_tilt_deg": 35.0,
+            "min_height": 0.09,
+            "lateral_std": 0.1,
+            "yaw_std": 0.35
+          }
+        },
+        "cloth_contact_slip": {
+          "func": "cloth_contact_slip",
+          "weight": -0.25,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "slip_std": 0.15
+          }
+        },
+        "cloth_nonfoot_contact": {
+          "func": "cloth_nonfoot_contact",
+          "weight": -1.0,
+          "local": true,
+          "params": {
+            "sensor_name": "feet_ground_contact",
+            "body_sensor_name": "robot_ground_contact"
+          }
         }
       },
       "curricula": {
@@ -93170,27 +93591,28 @@
                 "weight": -0.1
               },
               {
-                "step": 12000,
+                "step": 24000,
                 "weight": -0.2
               },
               {
-                "step": 18000,
+                "step": 36000,
                 "weight": -0.4
               },
               {
-                "step": 24000,
+                "step": 48000,
                 "weight": -0.6
               },
               {
-                "step": 30000,
+                "step": 60000,
                 "weight": -0.8
               },
               {
-                "step": 36000,
+                "step": 72000,
                 "weight": -1.0
               }
             ]
-          }
+          },
+          "local": true
         },
         "standing_envs": {
           "func": "mjlab_microduck.tasks.mdp.standing_envs_curriculum",
@@ -93442,6 +93864,171 @@
               }
             ]
           }
+        },
+        "hip_roll_neutral_weight": {
+          "func": "mjlab_microduck.tasks.mdp.reward_weight",
+          "params": {
+            "reward_name": "hip_roll_neutral",
+            "weight_stages": [
+              {
+                "step": 0,
+                "weight": -0.015
+              },
+              {
+                "step": 24000,
+                "weight": -0.03
+              },
+              {
+                "step": 36000,
+                "weight": -0.06
+              },
+              {
+                "step": 48000,
+                "weight": -0.09
+              },
+              {
+                "step": 60000,
+                "weight": -0.12
+              },
+              {
+                "step": 72000,
+                "weight": -0.15
+              }
+            ]
+          },
+          "local": true
+        },
+        "straight_foot_heading_weight": {
+          "func": "mjlab_microduck.tasks.mdp.reward_weight",
+          "params": {
+            "reward_name": "straight_foot_heading",
+            "weight_stages": [
+              {
+                "step": 0,
+                "weight": -0.015
+              },
+              {
+                "step": 24000,
+                "weight": -0.03
+              },
+              {
+                "step": 36000,
+                "weight": -0.06
+              },
+              {
+                "step": 48000,
+                "weight": -0.09
+              },
+              {
+                "step": 60000,
+                "weight": -0.12
+              },
+              {
+                "step": 72000,
+                "weight": -0.15
+              }
+            ]
+          },
+          "local": true
+        },
+        "vertical_body_velocity_weight": {
+          "func": "mjlab_microduck.tasks.mdp.reward_weight",
+          "params": {
+            "reward_name": "vertical_body_velocity",
+            "weight_stages": [
+              {
+                "step": 0,
+                "weight": 0.0
+              },
+              {
+                "step": 24000,
+                "weight": 0.0
+              },
+              {
+                "step": 36000,
+                "weight": 0.0
+              },
+              {
+                "step": 48000,
+                "weight": 0.0
+              },
+              {
+                "step": 60000,
+                "weight": 0.0
+              },
+              {
+                "step": 72000,
+                "weight": 0.0
+              }
+            ]
+          },
+          "local": true
+        },
+        "standing_foot_contact_weight": {
+          "func": "mjlab_microduck.tasks.mdp.reward_weight",
+          "params": {
+            "reward_name": "standing_foot_contact",
+            "weight_stages": [
+              {
+                "step": 0,
+                "weight": 0.0
+              },
+              {
+                "step": 24000,
+                "weight": 0.0
+              },
+              {
+                "step": 36000,
+                "weight": 0.0
+              },
+              {
+                "step": 48000,
+                "weight": 0.0
+              },
+              {
+                "step": 60000,
+                "weight": 0.0
+              },
+              {
+                "step": 72000,
+                "weight": 0.0
+              }
+            ]
+          },
+          "local": true
+        },
+        "standing_foot_motion_weight": {
+          "func": "mjlab_microduck.tasks.mdp.reward_weight",
+          "params": {
+            "reward_name": "standing_foot_motion",
+            "weight_stages": [
+              {
+                "step": 0,
+                "weight": 0.0
+              },
+              {
+                "step": 24000,
+                "weight": 0.0
+              },
+              {
+                "step": 36000,
+                "weight": 0.0
+              },
+              {
+                "step": 48000,
+                "weight": 0.0
+              },
+              {
+                "step": 60000,
+                "weight": 0.0
+              },
+              {
+                "step": 72000,
+                "weight": 0.0
+              }
+            ]
+          },
+          "local": true
         }
       },
       "commands": {
@@ -93790,6 +94377,84 @@
           "share_cnn_encoders": false,
           "class_name": "PPO",
           "symmetry_cfg": null
+        }
+      },
+      "terrain_overrides": {
+        "elastic_bridge": {
+          "commands": {
+            "twist": {
+              "resampling_time_range": [
+                3.0,
+                8.0
+              ],
+              "debug_vis": true,
+              "entity_name": "robot",
+              "heading_command": true,
+              "heading_control_stiffness": 0.5,
+              "rel_standing_envs": 0.1,
+              "rel_heading_envs": 0.0,
+              "rel_world_envs": 0.0,
+              "rel_forward_envs": 0.0,
+              "init_velocity_prob": 0.0,
+              "ranges": {
+                "lin_vel_x": [
+                  0.05,
+                  0.2
+                ],
+                "lin_vel_y": [
+                  0.0,
+                  0.0
+                ],
+                "ang_vel_z": [
+                  0.0,
+                  0.0
+                ],
+                "heading": [
+                  0.0,
+                  0.0
+                ]
+              },
+              "viz": {
+                "z_offset": 0.5,
+                "scale": 0.5
+              },
+              "rel_turn_in_place_envs": 0.0,
+              "turn_in_place_min_frac": 0.4,
+              "adapter_command_class": "VelocityCommandCommandOnlyCfg",
+              "local": true
+            }
+          },
+          "events": {
+            "reset_base": {
+              "func": "mjlab.envs.mdp.events.reset_root_state_uniform",
+              "params": {
+                "pose_range": {
+                  "x": [
+                    -0.5,
+                    0.5
+                  ],
+                  "y": [
+                    -0.5,
+                    0.5
+                  ],
+                  "z": [
+                    0.12,
+                    0.13
+                  ],
+                  "yaw": [
+                    -0.05,
+                    0.05
+                  ]
+                },
+                "velocity_range": {}
+              },
+              "mode": "reset",
+              "interval_range_s": null,
+              "is_global_time": false,
+              "min_step_count_between_reset": 0,
+              "local": true
+            }
+          }
         }
       }
     },

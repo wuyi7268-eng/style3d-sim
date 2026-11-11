@@ -269,7 +269,7 @@ class OfficialSensors:
             ],
             device=str(env.device),
         )
-        if getattr(env, "mixed_terrain", False):
+        if getattr(env, "mixed_terrain", False) or getattr(env.terrain, "kind", None) in ("cloth", "elastic_bridge"):
             wp.launch(
                 _soft_contact_flags,
                 dim=contacts.soft_contact_max,
