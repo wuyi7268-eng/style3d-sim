@@ -10,6 +10,10 @@ __pycache__/
 .Python
 build/
 assets/
+# Ship the meshes referenced by the vendored MicroDuck MJCF models.
+!/examples/microduck/microduck_rl-develop/src/mjlab_microduck/robot/microduck/assets/
+/examples/microduck/microduck_rl-develop/src/mjlab_microduck/robot/microduck/assets/*
+!/examples/microduck/microduck_rl-develop/src/mjlab_microduck/robot/microduck/assets/*.stl
 !/examples/microduck/assets/
 /examples/microduck/assets/*
 !/examples/microduck/assets/swing/

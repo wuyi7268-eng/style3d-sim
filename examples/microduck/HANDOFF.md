@@ -56,6 +56,15 @@ YpCVTFAK
 
 ## 2. 当前训练与场景快照
 
+### 2026-11-11 Git 分发缺失机器人网格
+
+根 `.gitignore` 的通用 `assets/` 规则曾忽略官方机器人目录的全部43个STL，本地可运行但克隆后缺文件。
+现仅放行 `microduck_rl-develop/src/mjlab_microduck/robot/microduck/assets/*.stl`，`.part`继续忽略。
+提交此修复时须同时纳入43个STL（约23.6 MB），不能只提交忽略规则；本次未自动commit/push。
+按Git可纳入文件列表复制到临时目录后，全部robot MJCF编译及Newton的14关节构造通过；
+未在Windows执行，检查日志在 `.validation/microduck_asset_distribution_20261111/check.log`。
+
+
 ### 2026-11-10 圆形蹦床
 
 同日新增`jump play --record-dir <新目录>`，仅单环境回放可用；每次策略步后记录真实刚体姿态与布面顶点，
