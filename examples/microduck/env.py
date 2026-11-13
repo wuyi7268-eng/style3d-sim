@@ -108,8 +108,9 @@ class PhysicsConfig:
 
 # Geometry construction lives in scenes.py; edit experiment materials here.
 PAD_CONFIG = SoftPadConfig(
-    # Cells per meter keep mesh spacing fixed when size changes (about 2.67 cm XY, 2 cm Z).
-    size=(1.2, 1.2, 0.12), cells_per_meter=(30, 30, 4.0), base_z=0,
+    # Keep base_z equal to minus thickness for an undeformed surface flush with the rigid floor.
+    size=(1.2, 1.2, 0.08), cells_per_meter=(30, 30, 4.0), base_z=-0.08,
+    allow_edge_crossing=True,
     # Native material damping approximates slow-recovery foam without permanent deformation.
     # Shear stiffness supports foot loads; damping slows both indentation and elastic recovery.
     density=80.0, shear_modulus=50.0, lame_lambda=4500.0,

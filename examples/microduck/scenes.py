@@ -73,7 +73,7 @@ class SceneConfig:
     elastic_bridge_friction: float = 1.2
     elastic_bridge_approach_length: float = 0.8
     elastic_bridge_approach_width: float = 0.8
-    elastic_bridge_ramp_length: float = 0.12
+    elastic_bridge_ramp_length: float = 0.06
     # Extra descent below the unloaded end tangent leaves room for compliant contact.
     elastic_bridge_ramp_drop: float = 0.015
     # Signed distance from the inlet: negative values place the root inside the cloth span.
@@ -887,8 +887,12 @@ class SoftPadConfig:
     contact_stiffness: float = 5.0e4
     # Explicit cells override density for legacy checkpoints and diagnostic meshes.
     cells_per_meter: float | tuple[float, float, float] | None = None
+    # Missing fields in historical checkpoints retain the original edge timeouts.
+    allow_edge_crossing: bool = False
 
     def __post_init__(self):
+        if not isinstance(self.allow_edge_crossing, bool):
+            raise TypeError("allow_edge_crossing must be a boolean")
         if len(self.size) != 3 or not all(np.isfinite(v) and v > 0 for v in self.size):
             raise ValueError("pad size must contain three finite positive lengths")
         if self.cells_per_meter is not None:
@@ -1620,8 +1624,9 @@ class MixedTerrain:
             "sampling": sampling,
             "floor": "world_local_cavity" if self.config.embedded else "shared_plane",
             "soft_contact": {"ke": self.config.contact_stiffness, "kd": 100.0, "mu": 0.8, "margin": 0.01},
-            "pad_edge_timeout_margin": PAD_EDGE_TIMEOUT_MARGIN,
-            "boundary_curriculum": "surface_locomotion_before_edge_crossing",
+            "pad_edge_timeout_margin": None if self.config.allow_edge_crossing else PAD_EDGE_TIMEOUT_MARGIN,
+            "boundary_curriculum": ("cross_surface_locomotion" if self.config.allow_edge_crossing
+                                    else "surface_locomotion_before_edge_crossing"),
             "vertex_face_contacts": "lowest_mesh_vertex_top_surface_v1",
             "scene_timeout_radius": 2.5,
         }
@@ -1763,7 +1768,7 @@ class MixedTerrain:
     def out_of_bounds(self, positions):
         margin = self.env.cfg["terrain"]["pad_edge_timeout_margin"]
         if margin is None:
-            # Playback may cross either side of the pad; retain the finite scene boundary for all worlds.
+            # Crossing-enabled training and playback retain the finite scene boundary for all worlds.
             radius = self.env.cfg["terrain"]["scene_timeout_radius"]
             return (positions[:, :2] - self.origins[:, :2]).norm(dim=-1) > radius
         # End the episode while the robot still has room to recover on the pad.

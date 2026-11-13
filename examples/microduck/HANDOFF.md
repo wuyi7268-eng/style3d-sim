@@ -58,9 +58,34 @@ YpCVTFAK
 
 ## 2. 当前训练与场景快照
 
+### 2026-11-13 平地 / 海绵垫各半 Velocity 场景
+
+用户选择固定分组：一半并行环境为纯平地，另一半为海绵垫，共用一个 Velocity 策略。
+复用 `mixed_soft_pad` profile 的 `fixed_groups_center` 和 `pad_probability=0.5`。
+用户随后要求垫面与平地齐平并训练跨地形：`env.py` 的 `PAD_CONFIG.base_z=-0.12`，
+厚度0.12 m，未变形顶面z=0；周围自动构建凹槽地板，垫面上方没有刚性盖板。
+`PAD_CONFIG.allow_edge_crossing=True` 取消垫缘8 cm提前重置，两组均保留半径2.5 m场景边界。
+软垫组仍在中心出生，可走到周围平地再返回；一半指场景数量，跨界后不保证实际软接触样本仍占50%。
+尚未新增边缘定向采样或穿越奖励，不保证随机速度指令能充分覆盖两个方向的过渡。
+当前源码垫子为1.2×1.2×0.12 m、36×36×1网格，每垫7776个四面体；材料未调整。
+参数均在 `env.py` 的 `PAD_CONFIG`；修改厚度时同步令base_z等于负厚度，保持初始齐平。
+新增跨界开关写入checkpoint地形元数据；旧checkpoint缺失字段时默认False，显式恢复旧环境仍保留旧边界。
+下面是128环境（64平地＋64软垫）的启动示例，环境总数尚非用户指定；需偶数才能严格各半：
+
+```bash
+.venv/bin/python -u -m examples.microduck.train \
+  --training-config examples/microduck/configs/rtx4090_mixed_soft_pad.json \
+  --num-envs 128 --pad-probability 0.5 --run-name velocity_flat_pad_half
+```
+
+该命令从头训练；迁移已有平地Velocity策略需另指定 `--init-from`，不能用严格 `--resume` 切换地形。
+本次未启动训练或选择初始化权重；几何/边界CPU回归不代表真实SynReal跨边缘行为验收。
+相关回归77通过、1 GPU跳过；覆盖四侧双向越界、场景外边界、凹槽无硬盖板及旧checkpoint默认边界。
+
 ### 2026-11-13 弹力桥两端布下斜托板
 
-平台与弹力带衔接处各加12 cm长、与布同宽的静态斜托板，中央56 cm仍自由悬空；只固定原两条短边。
+平台与弹力带衔接处各加6 cm长、与布同宽的静态斜托板，中央68 cm仍自由悬空；只固定原两条短边。
+用户在原12 cm版本基础上要求缩短至6 cm；下述CUDA检查和预览记录对应原12 cm版本。
 托板按各端参考布面切线布置，末端额外下降1.5 cm，保留3 mm法向粒子间隙，避免初始穿插。
 参数为SceneConfig.elastic_bridge_ramp_length/ramp_drop；length=0可关闭，长度必须小于半桥长。
 高度查询取变形布面与托板顶面较高者；入口0.65、出口0.55、spawn_distance=-0.05及材料/奖励保持现值。

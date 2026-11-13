@@ -9,14 +9,13 @@ import torch
 import warp as wp
 
 from examples.microduck.env import PAD_CONFIG
-from examples.microduck.scenes import MixedTerrain, add_inset_floor, SoftPadConfig, add_soft_pad
+from examples.microduck.scenes import MixedTerrain, SoftPadConfig, add_inset_floor, add_soft_pad
 
 # Test the buried-pad contract independently of the user's active experiment geometry.
-INSET_PAD = replace(PAD_CONFIG, size=(1.2, 1.2, 0.06), cells=(4, 4, 3), base_z=-0.06)
+INSET_PAD = replace(PAD_CONFIG, size=(1.2, 1.2, 0.06), cells=(4, 4, 3), base_z=-0.06, allow_edge_crossing=False)
 
 
-def fixture():
-    config = INSET_PAD
+def fixture(config=INSET_PAD):
     flat = newton.ModelBuilder()
     add_inset_floor(flat, config, has_pad=False)
     pad = newton.ModelBuilder()
@@ -37,8 +36,29 @@ def test_buried_surface_is_flush_and_old_checkpoint_keeps_raised_pad():
     assert INSET_PAD.embedded and INSET_PAD.top_z == pytest.approx(0)
     old = SoftPadConfig.from_checkpoint({'pad': {'base_z': 0.0015}})
     assert not old.embedded and old.top_z == pytest.approx(0.0615)
+    assert not old.allow_edge_crossing
     with pytest.raises(ValueError):
         replace(PAD_CONFIG, base_z=float('nan'))
+
+
+@pytest.mark.parametrize('axis', [0, 1])
+@pytest.mark.parametrize('sign', [-1, 1])
+def test_current_training_pad_is_flush_and_crosses_both_directions(axis, sign):
+    assert PAD_CONFIG.embedded and PAD_CONFIG.top_z == pytest.approx(0)
+    assert PAD_CONFIG.allow_edge_crossing
+    env, terrain = fixture(replace(PAD_CONFIG, cells=(4, 4, 3)))
+    assert env.cfg['terrain']['pad_edge_timeout_margin'] is None
+    assert env.cfg['terrain']['boundary_curriculum'] == 'cross_surface_locomotion'
+    restored = SoftPadConfig.from_checkpoint(env.cfg['terrain'])
+    assert restored.allow_edge_crossing
+    edge = terrain.config.size[axis] / 2
+    for distance in (0.0, edge - 0.07, edge, edge + 0.1, edge, 0.0, 2.5, 2.51):
+        pose = torch.zeros(2, 3)
+        pose[:, axis] = sign * distance
+        pose[:, 2] = 0.12
+        terrain.update_support(pose)
+        assert terrain.out_of_bounds(pose).tolist() == [distance > 2.5] * 2
+    assert terrain.has_pad.tolist() == [False, True]
 
 
 def test_floor_has_hole_only_in_pad_world_and_rigid_support_outside():
