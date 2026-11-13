@@ -99,6 +99,7 @@ def main():
     environment = json.loads((folder / "environment.json").read_text())
     cloth = environment.get("terrain", {}).get("kind") == "cloth"
     trampoline = environment.get("terrain", {}).get("kind") == "trampoline"
+    bridge = environment.get("terrain", {}).get("kind") == "elastic_bridge"
     if not trajectory:
         raise ValueError("Cannot build a scene from an empty recording")
     usd = folder / run["artifacts"]["usd"]["path"]
@@ -171,6 +172,10 @@ def main():
         if trampoline:
             target.z = root.z + 0.045
             offset = (0.65, -0.90, 0.44)
+        if bridge:
+            # Show the duck's full body and the free span below its feet from a fixed viewing angle.
+            target.z = root.z - 0.025
+            offset = (0.75, -1.10, 0.52)
         if args.front_view:
             offset = (1.45, 0.35, 0.95) if cloth else (0.55, 0.65, offset[2])
             c, s = math.cos(initial_heading), math.sin(initial_heading)
@@ -197,6 +202,8 @@ def main():
         light = bpy.data.objects.new(name, data)
         scene.collection.objects.link(light)
         support_height = 0.93 if cloth else 0.4 if trampoline else 0.0
+        if bridge:
+            support_height = environment["terrain"]["config"]["elastic_bridge_height"]
         light.location = Vector(location) + Vector((0, 0, support_height))
         aim(light, (0, 0, 0.15 + support_height))
         for entry in trajectory:

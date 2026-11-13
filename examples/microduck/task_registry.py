@@ -1,4 +1,4 @@
-"""Names for exactly the variants registered by the bundled official project."""
+"""Bundled official variants and isolated local task ports."""
 
 BASE_TASKS = (
     "velocity",
@@ -17,16 +17,20 @@ BASE_TASKS = (
 )
 ROUGH_TASKS = ("velocity", "velstand", "standup", "sitstand", "groundpick")
 BACKLASH_TASKS = BASE_TASKS[:6] + ("rollers", "swizzle", "rollercrouch", "rollerslope")
-TASKS = (
+OFFICIAL_TASKS = (
     BASE_TASKS
     + tuple(f"{t}_rough" for t in ROUGH_TASKS)
     + tuple(f"{t}_backlash" for t in BACKLASH_TASKS)
     + tuple(f"{t}_rough_backlash" for t in ROUGH_TASKS)
 )
+TASKS = OFFICIAL_TASKS + ("running",)
 ROLLER_TASKS = ("rollers", "swizzle", "rollercrouch", "rollerslope", "rollerstandup", "spin")
 
 
 def base_task(task):
+    # Running shares the walking robot and controls, but owns its training recipe.
+    if task == "running":
+        return "velocity"
     return task.split("_")[0]
 
 

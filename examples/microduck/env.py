@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, replace
 from types import SimpleNamespace
 
 import newton
+import numpy as np
 import torch
 import warp as wp
 
@@ -345,9 +346,18 @@ class MicroDuckEnv:
                                   else scene_metadata["config"]["trampoline_height"])
                 if terrain == "elastic_bridge":
                     config = scene_metadata["config"]
-                    support_height = config["elastic_bridge_height"] - config["elastic_bridge_sag"]
-                    robot.joint_q[0] = 0.0
+                    support_height = config["elastic_bridge_height"]
+                    robot.joint_q[0] = -config["elastic_bridge_length"] / 2 - config["elastic_bridge_spawn_distance"]
                     robot.joint_q[1] = 0.0
+                    if config["elastic_bridge_spawn_distance"] < 0:
+                        # Interpolate the authored mesh rows to match the piecewise planar cloth surface.
+                        half_length = config["elastic_bridge_length"] / 2
+                        xs = np.linspace(-half_length, half_length, config["elastic_bridge_cells_x"] + 1)
+                        baseline = (config["elastic_bridge_height"]
+                                    + (config["elastic_bridge_exit_height"] - config["elastic_bridge_height"])
+                                    * (xs + half_length) / (2 * half_length))
+                        heights = baseline - config["elastic_bridge_sag"] * (1 - (xs / half_length) ** 2)
+                        support_height = float(np.interp(robot.joint_q[0], xs, heights))
                 robot.joint_q[2] += support_height + clearance
         # Preserve the standalone topology for interactive diagnostics. Batched RL
         # replicates the same template, including a single-world training run.
@@ -394,8 +404,14 @@ class MicroDuckEnv:
             num_envs,
             self.device,
             enabled=randomize_foot_friction,
+            terrain=terrain,
         )
         self.model.set_gravity((0.0, 0.0, -9.81))
+        if task == "running":
+            from .running_randomization import RunningRandomization
+            from .task_profiles import load_task_spec
+
+            self.running_randomization = RunningRandomization(self, load_task_spec(task)[0])
         newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.model)
         if preview:
             self.solver = None
@@ -634,7 +650,10 @@ class MicroDuckEnv:
         linear = velocity[:, :3]
         from .adapter import link_origin_velocity
 
-        linear = link_origin_velocity(linear, velocity[:, 3:], quat, wp.to_torch(self.model.body_com)[0])
+        com = wp.to_torch(self.model.body_com)
+        # Running randomizes COM independently in each world.
+        root_com = com.reshape(self.num_envs, -1, 3)[:, 0] if self.task == "running" else com[0]
+        linear = link_origin_velocity(linear, velocity[:, 3:], quat, root_com)
         return (
             q,
             qd,
@@ -716,9 +735,15 @@ class MicroDuckEnv:
         guarded = training and self.mixed_terrain
         if guarded:
             self.terrain.guard.begin_step()
+        history = self.official.observations.history if self.official is not None else None
+        imu = getattr(history, "imu", None)
         for substep in range(self.decimation):
             if actions is not None:
                 torque = self.apply_policy_targets()
+                if hasattr(history, "record_torque"):
+                    history.record_torque(torque)
+            if imu is not None:
+                imu.begin_substep(self)
             self.states[0].clear_forces()
             self.apply_task_forces()
             if apply_viewer_forces and self.viewer is not None:
@@ -729,6 +754,8 @@ class MicroDuckEnv:
                     self.terrain.check_contacts()
             self.solver.step(self.states[0], self.states[1], self.control, self.contacts, self.physics_dt)
             self.states.reverse()
+            if imu is not None:
+                imu.end_substep(self)
             if guarded:
                 self.terrain.guard.after_substep(substep)
             if not self.interactive:
@@ -789,7 +816,15 @@ class MicroDuckEnv:
             side_fall = self.terrain.side_out_of_bounds(pose)
             failure |= side_fall | (pose[:, 2] - support_height < 0.065)
             timeout &= ~failure
-        done = failure | timeout
+        bridge_log = {}
+        success = torch.zeros_like(failure)
+        if self.official.bridge_path is not None:
+            # Walking off either platform is a failure; only the episode clock is a truncation.
+            failure |= self.terrain.out_of_bounds(pose)
+            bonus, success, bridge_log = self.official.bridge_path.evaluate(pose, linear, gravity, failure)
+            reward += bonus
+            timeout &= ~(failure | success)
+        done = failure | timeout | success
         terrain_log = self.terrain.log(reward, failure, timeout, linear, gravity, self.commands) if self.mixed_terrain else {}
         self.sim_time += self.step_dt
         # Record pre-reset geometry so simulation diagnostics cannot hide a fall behind auto-reset.
@@ -818,6 +853,7 @@ class MicroDuckEnv:
             # Phase commands are not velocities; avoid misleading velocity-tracking diagnostics.
             extras["log"] = {key: value for key, value in extras["log"].items() if not key.startswith("Tracking/")}
         extras["log"].update({f"Task/{key}": value.mean() for key, value in task_terms.items()})
+        extras["log"].update(bridge_log)
         extras["log"].update(self.official.extras["log"])
         extras["log"].update(terrain_log)
         if self.viewer:

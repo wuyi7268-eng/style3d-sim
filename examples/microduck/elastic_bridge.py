@@ -1,4 +1,4 @@
-"""Preview, train, or replay MicroDuck on the elastic bridge using the shared walking pipeline."""
+"""Elastic-bridge Velocity entry point with an independent recipe and training configuration."""
 
 import argparse
 import sys
@@ -33,7 +33,7 @@ def preview(argv):
         )
         viewer.set_model(env.model)
         env.terrain.configure_viewer(viewer)
-        print("Elastic bridge: membrane center spawn, fixed short ends, free sides. "
+        print("Elastic bridge: inlet platform spawn, fixed short ends, free sides. "
               "STATIC PREVIEW (no physics or training).", flush=True)
         for _ in range(args.num_frames):
             if not viewer.is_running():
@@ -65,10 +65,14 @@ def main(argv=None):
     # The shared entry points own checkpoint validation, PPO, PD and manual replay resets.
     options = argv[1:]
     defaults = {"--solver": "synreal", "--task": "velocity", "--terrain": "elastic_bridge"}
+    for option, expected in defaults.items():
+        for index, item in enumerate(options):
+            if item.split("=")[0] == option:
+                value = item.split("=", 1)[1] if "=" in item else options[index + 1] if index + 1 < len(options) else None
+                if value != expected:
+                    parser.error(f"elastic_bridge requires {option} {expected}; use the shared entry point for other tasks")
     if args.mode == "train":
-        defaults.update({"--num-envs": "32", "--run-name": "elastic_bridge_velocity"})
-        if not any(option.split("=")[0] in ("--resume", "--init-from") for option in options):
-            defaults["--policy-variant"] = "history"
+        defaults["--num-envs"] = "32"
     for option, value in defaults.items():
         if not any(item.split("=")[0] == option for item in options):
             options.extend((option, value))

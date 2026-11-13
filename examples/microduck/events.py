@@ -1,8 +1,6 @@
 """Startup randomization, reset distributions, interval events and termination curricula."""
 
 import copy
-import json
-from pathlib import Path
 from types import SimpleNamespace
 
 import torch
@@ -10,10 +8,11 @@ import warp as wp
 
 from . import reset_functions as upstream
 from .recipe import RobotView
+from .task_profiles import load_task_spec
 
 
-def randomize_foot_friction(model, task, num_envs, device, *, enabled=False):
-    spec = json.loads((Path(__file__).parent / "configs/official_snapshot.json").read_text())["tasks"][task]
+def randomize_foot_friction(model, task, num_envs, device, *, enabled=False, terrain="default"):
+    spec, _, _ = load_task_spec(task, terrain)
     if "foot_friction" not in spec["events"]:
         return {"enabled": False, "reason": "official roller task has no foot_friction event"}
     params = spec["events"]["foot_friction"]["params"]
@@ -181,6 +180,8 @@ def prepare_reset(recipe, ids):
         if not hasattr(recipe, "_ball_kick_dir_w"):
             recipe._ball_kick_dir_w = torch.zeros(count, 2, device=env.device)
         recipe._ball_kick_dir_w[ids] = torch.stack((c, s), -1)
+    if getattr(env, "task", None) == "running":
+        env.running_randomization.reset(ids, recipe, q)
     env.task_logic.spawn[ids] = q[ids]
     if hasattr(env.task_logic, "spawn_velocity"):
         from .adapter import rotate
@@ -241,6 +242,10 @@ class PushEvents:
                     changed[event_ids] = True
                 continue
             ranges = cfg["params"]["velocity_range"]
+            if getattr(env, "task", None) == "running":
+                ranges = env.running_randomization.push_range(recipe)
+                if not any(lo or hi for lo, hi in ranges.values()):
+                    continue
             for course in recipe.spec["curricula"].values():
                 p = course["params"]
                 if course["func"].endswith(".push_curriculum") and p["event_name"] == name:

@@ -13,7 +13,14 @@ from .recipe import RECIPE
 def checkpoint_policy_variant(metadata):
     """Legacy metadata denotes the standard network; new history checkpoints are explicit."""
     variant = metadata.get("policy_variant", "standard")
-    classes = {"standard": "ActorCritic", "history": "HistoryActorCritic"}
+    from .cloth_policy import POLICY_CLASS, SUPPORTED_SPECS, VARIANT, supports_cloth_policy
+
+    classes = {"standard": "ActorCritic", "history": "HistoryActorCritic", VARIANT: POLICY_CLASS}
+    if variant == VARIANT and (
+        metadata.get("history") not in SUPPORTED_SPECS
+        or not supports_cloth_policy(metadata.get("task"), metadata.get("terrain", {}).get("kind"))
+    ):
+        raise ValueError("Unsupported cloth history scope or observation/feedback contract")
     if variant not in classes:
         raise ValueError(f"Unsupported policy_variant: {variant}")
     policy_class = metadata.get("ppo", {}).get("policy", {}).get("class_name", "ActorCritic")
@@ -75,8 +82,24 @@ def initialize_transfer(runner, path, *, inherit_training_stage=False):
     for key in ("model_state_dict", "obs_norm_state_dict", "privileged_obs_norm_state_dict"):
         if key in checkpoint and not all(torch.isfinite(value).all() for value in checkpoint[key].values()):
             raise ValueError(f"Non-finite tensors in checkpoint {key}")
-    runner.alg.policy.load_state_dict(checkpoint["model_state_dict"], strict=True)
-    if runner.empirical_normalization:
+    from .cloth_policy import ClothHistoryActorCritic, migrate_normalizer, migrate_weights
+
+    cloth = isinstance(runner.alg.policy, ClothHistoryActorCritic)
+    converted = False
+    feedback_reinitialized = False
+    if cloth:
+        metadata_path = Path(path).with_name("config.json")
+        source_history = json.loads(metadata_path.read_text()).get("history") if metadata_path.exists() else None
+        if source_history is not None and source_history.get("frame_dim") == 48:
+            source_history = None  # Legacy flat history has no leg feedback channels.
+        feedback_reinitialized = source_history is not None and source_history["version"] < 3
+        converted = migrate_weights(runner.alg.policy, checkpoint["model_state_dict"], source_history=source_history)
+    else:
+        runner.alg.policy.load_state_dict(checkpoint["model_state_dict"], strict=True)
+    if cloth and runner.empirical_normalization:
+        migrate_normalizer(runner.obs_normalizer, checkpoint["obs_norm_state_dict"])
+        migrate_normalizer(runner.privileged_obs_normalizer, checkpoint["privileged_obs_norm_state_dict"])
+    elif runner.empirical_normalization:
         runner.obs_normalizer.load_state_dict(checkpoint["obs_norm_state_dict"], strict=True)
         runner.privileged_obs_normalizer.load_state_dict(checkpoint["privileged_obs_norm_state_dict"], strict=True)
     # RSL-RL stores the last completed iteration index, not the next iteration.
@@ -86,6 +109,8 @@ def initialize_transfer(runner, path, *, inherit_training_stage=False):
         "source_iteration": int(checkpoint["iter"]),
         "checkpoint_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "optimizer_restored": False,
+        "network_expanded": converted,
+        "feedback_reinitialized": feedback_reinitialized,
         "normalizers_restored": runner.empirical_normalization,
         "training_stage_inherited": inherit_training_stage,
         "start_iteration": runner.current_learning_iteration,

@@ -29,16 +29,19 @@ from .reward_functions import (
     feet_surface_slip,
 )
 from .sensors import OfficialSensors, whole_body_angular_momentum
+from .task_profiles import is_bridge_velocity, load_task_spec
 
 RECIPE = "official_adapted_v1"
 SNAPSHOT = Path(__file__).with_name("configs") / "official_snapshot.json"
 
 
-def recipe_fingerprint():
+def recipe_fingerprint(task="velocity", terrain="default"):
     # Include executable formulas and adapters so resume cannot silently change its objective.
     digest = hashlib.sha256()
+    spec, source, profile = load_task_spec(task, terrain)
+    digest.update(json.dumps((spec, source, profile), sort_keys=True).encode())
     for name in (
-        "configs/official_snapshot.json",
+        "task_profiles.py",
         "reward_functions.py",
         "velocity_rewards.py",
         "sensors.py",
@@ -61,6 +64,17 @@ def recipe_fingerprint():
         "policy_spec.py",
     ):
         digest.update((Path(__file__).parent / name).read_bytes())
+    from .cloth_policy import supports_cloth_policy
+
+    if supports_cloth_policy(task, terrain):
+        for name in ("cloth_policy.py", "cloth_imu.py", "cloth_current.py"):
+            digest.update((Path(__file__).parent / name).read_bytes())
+    if is_bridge_velocity(task, terrain):
+        for name in ("bridge_path.py", "bridge_rewards.py", "elastic_bridge.py"):
+            digest.update((Path(__file__).parent / name).read_bytes())
+    if task == "running":
+        digest.update((Path(__file__).parent / "running.py").read_bytes())
+        digest.update((Path(__file__).parent / "running_randomization.py").read_bytes())
     return digest.hexdigest()
 
 
@@ -95,13 +109,18 @@ def multiply_xyzw(a, b):
 
 class OfficialRecipe:
     def __init__(self, env, robot):
-        snapshot = json.loads(SNAPSHOT.read_text())
-        self.spec = snapshot["tasks"][env.task]
-        # Narrow supports need commands aligned with their usable walking direction.
         terrain_kind = getattr(env.terrain, "kind", None)
+        self.spec, source_sha256, profile = load_task_spec(env.task, terrain_kind or "default")
         scene_overrides = self.spec.get("terrain_overrides", {}).get(terrain_kind, {})
-        for section, terms in scene_overrides.items():
-            self.spec[section].update(terms)
+        self.reward_overrides = {}
+        if env.task == "running":
+            from .running import REWARDS
+
+            self.reward_overrides = REWARDS
+        if is_bridge_velocity(env.task, terrain_kind):
+            from .bridge_rewards import REWARDS
+
+            self.reward_overrides = REWARDS
         self.env = env
         self.robot = RobotView()
         self.robot.joint_names = env.joint_names
@@ -148,6 +167,11 @@ class OfficialRecipe:
         self.phase_offset = torch.zeros(env.num_envs, device=env.device)
         self.timers = {name: torch.zeros(env.num_envs, device=env.device) for name in self.spec["commands"]}
         self.velocity_commands = None
+        self.bridge_path = None
+        if "path_following" in self.spec["commands"]["twist"]:
+            from .bridge_path import BridgePath
+
+            self.bridge_path = BridgePath(self, self.spec["commands"]["twist"]["path_following"])
         if "local_sampling" in self.spec["commands"]["twist"]:
             from .velocity_commands import VelocityCommandSampler
 
@@ -161,7 +185,8 @@ class OfficialRecipe:
         )
         self.params = {name: self.decode(term["params"]) for name, term in self.spec["rewards"].items()}
         for name, term in self.spec["rewards"].items():
-            function = getattr(upstream, term["func"].rsplit(".", 1)[-1], None)
+            func = term["func"].rsplit(".", 1)[-1]
+            function = self.reward_overrides.get(func) or getattr(upstream, func, None)
             if function is not None:
                 for key, parameter in inspect.signature(function).parameters.items():
                     default = parameter.default
@@ -202,7 +227,7 @@ class OfficialRecipe:
         }
         for name, term in self.spec["rewards"].items():
             func = term["func"].rsplit(".", 1)[-1]
-            if func in base or hasattr(upstream, func) or hasattr(velocity_rewards, func):
+            if func in self.reward_overrides or func in base or hasattr(upstream, func) or hasattr(velocity_rewards, func):
                 self.supported[name] = func
             else:
                 self.omitted[name] = func
@@ -215,6 +240,8 @@ class OfficialRecipe:
             if func == "commanded_foot_swing_height":
                 self.commanded_swing_height = CommandedFootSwingHeight(self)
         env.max_episode_length = round(self.spec["episode_length_s"] / self.step_dt)
+        if self.bridge_path is not None:
+            env.max_episode_length = round(self.bridge_path.config["episode_length_s"] / self.step_dt)
         from .events import PushEvents
         from .observations import CONTRACT, OfficialObservations
 
@@ -229,8 +256,9 @@ class OfficialRecipe:
             "observation_processing": "upstream noise, encoder/IMU bias, clipping, scaling and delays; clean critic",
             "reset_events": "root pose, servo offsets, recovery poses, BallKick root-relative ball",
             "interval_events": list(self.pushes.events),
-            "source_sha256": snapshot["source_sha256"],
-            "recipe_fingerprint": recipe_fingerprint(),
+            "source_sha256": source_sha256,
+            "recipe_profile": profile,
+            "recipe_fingerprint": recipe_fingerprint(env.task, terrain_kind or "default"),
             "terrain_overrides": scene_overrides,
             "supported_rewards": self.supported,
             "omitted_rewards": self.omitted,
@@ -256,7 +284,8 @@ class OfficialRecipe:
                 "terrain geometry is a fixed upstream seed-42 realization; height rays hit terrain only",
                 "critic foot-contact-force channels omitted; contact flags use geometric contacts",
                 "local feet_surface_slip uses contact-relative tangent speeds on pads and original XY speeds on rigid ground",
-                "no mass/inertia, COM, BAM/wheel friction or armature randomization; no expert BC",
+                ("running: trunk mass/inertia, reset COM/armature, staged pushes/tilt; no BAM friction or expert BC"
+                 if env.task == "running" else "no mass/inertia, COM, BAM/wheel friction or armature randomization; no expert BC"),
                 (
                     "soft-pad deformation failures terminate isolated episodes with rate limits; other instability fails fast"
                     if env.mixed_terrain
@@ -327,6 +356,8 @@ class OfficialRecipe:
         self.standing[ids] = False
         if self.velocity_commands is not None:
             self.velocity_commands.reset(ids)
+        if self.bridge_path is not None:
+            self.bridge_path.reset(ids)
         # Stateful reward caches must not couple two episodes after a partial reset.
         for name in ("_prev_neck_actions", "_prev_actuator_forces"):
             if hasattr(self, name):
@@ -341,6 +372,8 @@ class OfficialRecipe:
             for timer in self.timers.values():
                 timer.sub_(self.step_dt)
         for name, config in self.spec["commands"].items():
+            if name == "twist" and self.bridge_path is not None:
+                continue
             selected = ids if ids is not None else (self.timers[name] <= 0).nonzero().flatten()
             if not len(selected):
                 continue
@@ -348,6 +381,10 @@ class OfficialRecipe:
                 continue
             ranges = config["ranges"]
             if name == "twist":
+                if getattr(env, "task", None) == "running":
+                    from .running import command_ranges
+
+                    ranges = command_ranges(self)
                 ranges = [ranges[n] for n in ("lin_vel_x", "lin_vel_y", "ang_vel_z")]
                 probability = config.get("rel_standing_envs", 0.0)
                 for term in self.spec["curricula"].values():
@@ -421,6 +458,8 @@ class OfficialRecipe:
             phase = self.phase_offset + env.episode_length_buf * self.step_dt / period
             env.commands[:, 0] = torch.cos(2 * torch.pi * phase)
             env.commands[:, 1] = torch.sin(2 * torch.pi * phase)
+        if self.bridge_path is not None:
+            self.bridge_path.update(ids)
 
     def refresh(self, q, qd, pose, linear, angular, gravity, torque, previous):
         env = self.env
@@ -443,7 +482,8 @@ class OfficialRecipe:
             root_link_lin_vel_b=linear,
             root_link_ang_vel_b=angular,
             root_link_lin_vel_w=link_origin_velocity(
-                velocity[:, 0, :3], velocity[:, 0, 3:], pose[:, 3:], wp.to_torch(env.model.body_com)[0]
+                velocity[:, 0, :3], velocity[:, 0, 3:], pose[:, 3:],
+                com[:, 0] if env.task == "running" else com[0, 0]
             ),
             body_link_quat_w=bodies[:, :, [6, 3, 4, 5]],
             body_link_ang_vel_w=velocity[:, :, 3:],
@@ -473,6 +513,8 @@ class OfficialRecipe:
             self.scene["ball"].data = SimpleNamespace(root_link_lin_vel_w=velocity[:, env.task_logic.ball_body, :3])
 
     def base_reward(self, func, params):
+        if func in getattr(self, "reward_overrides", {}):
+            return self.reward_overrides[func](self, **params)
         if func == "soft_pad_failure":
             if getattr(self.env, "mixed_terrain", False):
                 return self.env.terrain.guard.failed.float()

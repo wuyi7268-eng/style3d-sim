@@ -67,3 +67,10 @@ Continue with the import validation, frame rendering, and encoding commands abov
 The trampoline camera follows the duck at a fixed viewing angle. Source mismatch playback uses the current
 scene and the saved policy; it does not reproduce the historical square trampoline. Recording preserves manual
 reset behavior, and does not apply automatic resets or external assistance.
+
+Elastic-bridge Velocity replay supports `--record-dir` through the regular
+`examples.microduck.elastic_bridge play` entry point. Use `--manual-command --command 0.4 0 0`
+for a constant forward command and `--num-frames 750` for 15 seconds at 50 Hz.
+The recorder exports the actual free-span triangles and both rigid platforms; the Blender builder
+uses bridge-height lighting and a tracking camera. Inspect framing and the recorded outcome before rendering.
+`--record-until-pad-edge` stops at the free-span boundary if requested; omit it for a full timed capture.

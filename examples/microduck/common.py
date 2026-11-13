@@ -7,6 +7,7 @@ import os
 from dataclasses import asdict, replace
 from pathlib import Path
 
+from .task_profiles import BRIDGE_TRAINING, is_bridge_velocity
 from .task_registry import TASKS
 
 
@@ -31,7 +32,7 @@ def setup(mode, argv=None):
     parser.add_argument("--training-config", type=Path, help="JSON file containing CLI defaults and optional PPO overrides")
     parser.add_argument("--task", choices=TASKS, default=None)
     parser.add_argument("--recipe", choices=["official_adapted_v1"], default=None)
-    parser.add_argument("--policy-variant", choices=["standard", "history"], default=None,
+    parser.add_argument("--policy-variant", choices=["standard", "history", "cloth_history"], default=None,
                         help="network for new training; resume/play infer it from the checkpoint")
     parser.add_argument("--solver", choices=["mujoco", "synreal"], default="mujoco")
     parser.add_argument("--environment-profile", choices=tuple(ENVIRONMENT_CONFIGS), default=None)
@@ -78,6 +79,8 @@ def setup(mode, argv=None):
         help="sample one foot-ground friction value per environment at startup",
     )
     if mode == "play":
+        parser.add_argument("--manual-command", action="store_true",
+                            help="control bridge playback with --command and keyboard instead of centerline feedback")
         parser.add_argument("--heading-hold", action="store_true",
                             help="steer a single Velocity checkpoint along its initial heading using pose feedback")
         parser.add_argument("--heading-max-yaw", type=float, default=1.0,
@@ -140,6 +143,13 @@ def setup(mode, argv=None):
             parser.error(f"checkpoint does not exist: {saved_checkpoint}")
         metadata = json.loads(saved_checkpoint.with_name("config.json").read_text(encoding="utf-8"))
     saved_terrain = (metadata or {}).get("terrain", {}).get("kind", "default")
+    selected_terrain = preliminary.terrain or (
+        saved_terrain if metadata is not None else preliminary.environment_profile or "default"
+    )
+    selected_task = preliminary.task or (metadata or {}).get("task", "velocity")
+    if mode == "train" and is_bridge_velocity(selected_task, selected_terrain):
+        bridge_defaults = json.loads(BRIDGE_TRAINING.read_text())["training"]
+        parser.set_defaults(**{**bridge_defaults, **training_config.get("training", {})})
     inferred_profile = (saved_terrain if saved_terrain in ENVIRONMENT_CONFIGS else
                         preliminary.terrain if preliminary.terrain in ENVIRONMENT_CONFIGS else "official")
     profile_name = preliminary.environment_profile or inferred_profile
@@ -181,6 +191,7 @@ def setup(mode, argv=None):
         if args.policy_variant is not None and args.policy_variant != saved_variant:
             parser.error(f"checkpoint uses {saved_variant}; cannot load it as {args.policy_variant}")
         args.policy_variant = saved_variant
+        args.checkpoint_history = metadata.get("history")
     profile = environment_config(args.environment_profile)
     args.physics = resolve_physics(profile, metadata, use_checkpoint=args.use_checkpoint_environment)
     if args.physics_substeps is not None:
@@ -233,7 +244,8 @@ def setup(mode, argv=None):
         if saved_recipe == "official_adapted_v1":
             from .recipe import recipe_fingerprint
 
-            if metadata.get("official_alignment", {}).get("recipe_fingerprint") != recipe_fingerprint():
+            current_fingerprint = recipe_fingerprint(saved_task, args.terrain)
+            if metadata.get("official_alignment", {}).get("recipe_fingerprint") != current_fingerprint:
                 if mode != "play" or not args.allow_recipe_mismatch:
                     parser.error(
                         "official recipe files differ from the checkpoint; use its original recipe files "
@@ -265,11 +277,19 @@ def setup(mode, argv=None):
     args.recipe = args.recipe or "official_adapted_v1"
     args.task = args.task or "velocity"
     args.terrain = args.terrain or "default"
+    if args.task == "running" and args.terrain != "default":
+        parser.error("Running supports --terrain default only")
+    scope = training_config.get("scope", {})
+    if any(getattr(args, key, None) != value for key, value in scope.items()):
+        parser.error(f"training configuration is restricted to {scope}; it cannot configure another task or terrain")
     args.pad_probability = 0.5 if args.pad_probability is None else args.pad_probability
     if not 0.0 <= args.pad_probability <= 1.0:
         parser.error("--pad-probability must be between 0 and 1")
     if args.terrain != "default" and args.solver != "synreal":
         parser.error("Non-default terrain scenes require SynReal")
+    from .cloth_policy import VARIANT, supports_cloth_policy
+
+    cloth_scope = supports_cloth_policy(args.task, args.terrain)
     if args.init_from:
         from .checkpoint import resolve_checkpoint, transfer_metadata
 
@@ -280,10 +300,22 @@ def setup(mode, argv=None):
         from .checkpoint import checkpoint_policy_variant
 
         source_variant = checkpoint_policy_variant(source_metadata)
-        if args.policy_variant is not None and args.policy_variant != source_variant:
-            parser.error("--init-from requires the same policy variant; network conversion is not supported")
-        args.policy_variant = source_variant
-    args.policy_variant = args.policy_variant or "standard"
+        if args.diagnostic_no_exploration:
+            args.checkpoint_history = source_metadata.get("history")
+        if cloth_scope and not args.diagnostic_no_exploration:
+            if args.policy_variant not in (None, VARIANT):
+                parser.error("New cloth Velocity training requires --policy-variant cloth_history")
+            args.policy_variant = VARIANT
+        else:
+            if args.policy_variant is not None and args.policy_variant != source_variant:
+                parser.error("--init-from requires the same policy variant outside cloth Velocity")
+            args.policy_variant = source_variant
+    fresh_cloth = mode == "train" and cloth_scope and not args.resume and not args.diagnostic_no_exploration
+    if fresh_cloth and args.policy_variant not in (None, VARIANT):
+        parser.error("New cloth Velocity training requires --policy-variant cloth_history")
+    args.policy_variant = args.policy_variant or (VARIANT if fresh_cloth else "standard")
+    if args.policy_variant == VARIANT and not cloth_scope:
+        parser.error("cloth_history is restricted to Velocity on cloth, hammock or elastic_bridge")
     args.teacher_bc = None
     if args.velocity_teacher or args.standup_teacher:
         if not (args.velocity_teacher and args.standup_teacher):
@@ -355,7 +387,9 @@ def create_env(args):
         print("Playback resets: manual only (R resets all environments; --fall-reset is ignored)", flush=True)
     from .observations import configure_policy_observations
 
-    configure_policy_observations(env, getattr(args, "policy_variant", "standard"))
+    configure_policy_observations(
+        env, getattr(args, "policy_variant", "standard"), getattr(args, "checkpoint_history", None)
+    )
     print(f"Environment: {args.environment_source}, profile={args.environment_profile}, "
           f"terrain={args.terrain}, num_envs={args.num_envs}, pad_probability={args.pad_probability:g}, "
           f"randomize_foot_friction={args.randomize_foot_friction}", flush=True)

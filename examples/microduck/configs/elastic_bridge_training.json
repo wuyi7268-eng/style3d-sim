@@ -1,0 +1,33 @@
+{
+  "scope": {
+    "task": "velocity",
+    "terrain": "elastic_bridge"
+  },
+  "training": {
+    "iterations": 10000,
+    "run_name": "elastic_bridge_velocity"
+  },
+  "rl": {
+    "num_steps_per_env": 24,
+    "save_interval": 50,
+    "algorithm": {
+      "num_learning_epochs": 5,
+      "num_mini_batches": 4,
+      "learning_rate": 0.0001,
+      "schedule": "adaptive",
+      "gamma": 0.99,
+      "lam": 0.95,
+      "entropy_coef": 0.005,
+      "desired_kl": 0.01,
+      "max_grad_norm": 1.0,
+      "value_loss_coef": 1.0,
+      "use_clipped_value_loss": true,
+      "clip_param": 0.2,
+      "normalize_advantage_per_mini_batch": false,
+      "optimizer": "adam",
+      "share_cnn_encoders": false,
+      "class_name": "PPO",
+      "symmetry_cfg": null
+    }
+  }
+}

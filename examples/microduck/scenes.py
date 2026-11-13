@@ -62,19 +62,22 @@ class SceneConfig:
     elastic_bridge_length: float = 0.80
     elastic_bridge_width: float = 0.30
     elastic_bridge_height: float = 0.65
+    elastic_bridge_exit_height: float = 0.55
     elastic_bridge_sag: float = 0.04
     elastic_bridge_cells_x: int = 40
     elastic_bridge_cells_y: int = 10
     elastic_bridge_density: float = 0.10
-    elastic_bridge_stretch: float = 5000.0
+    elastic_bridge_stretch: float = 1200.0
     elastic_bridge_bend: float = 0.0
-    elastic_bridge_damping: float = 1
-    # Large edge damping destabilizes this lightweight mesh at millisecond timesteps.
-    elastic_bridge_bend_damping: float = 0.0
-    elastic_bridge_friction: float = 1
+    elastic_bridge_damping: float = 0
+    elastic_bridge_friction: float = 1.2
     elastic_bridge_approach_length: float = 0.8
     elastic_bridge_approach_width: float = 0.8
-    elastic_bridge_spawn_distance: float = 0.4
+    elastic_bridge_ramp_length: float = 0.12
+    # Extra descent below the unloaded end tangent leaves room for compliant contact.
+    elastic_bridge_ramp_drop: float = 0.015
+    # Signed distance from the inlet: negative values place the root inside the cloth span.
+    elastic_bridge_spawn_distance: float = -0.05
     sand_length: float = 0.32
     sand_width: float = 0.24
     sand_depth: float = 0.02
@@ -276,7 +279,7 @@ def add_scene(builder, kind, config=SCENE_CONFIG):
         vertices=vertices.tolist(),
         indices=np.asarray(faces, dtype=np.int32).reshape(-1).tolist(),
         density=config.hammock_density,
-        tri_aniso_ke=wp.vec3(config.hammock_stretch, config.hammock_stretch, config.hammock_stretch),
+        tri_aniso_ke=wp.vec3(config.hammock_stretch, config.hammock_stretch, config.hammock_stretch * 0.5),
         edge_aniso_ke=wp.vec3(config.hammock_bend),
         tri_kd=1.0,
         edge_kd=0.01,
@@ -415,11 +418,11 @@ def add_elastic_bridge(builder, config):
     """A compliant walking strip clamped at its two short ends, with free long edges."""
     from newton.solvers import style3d
 
-    for name in ("length", "width", "height", "density", "stretch", "approach_length", "approach_width", "spawn_distance"):
+    for name in ("length", "width", "height", "exit_height", "density", "stretch", "approach_length", "approach_width"):
         value = getattr(config, f"elastic_bridge_{name}")
         if not math.isfinite(value) or value <= 0:
             raise ValueError(f"elastic_bridge_{name} must be finite and positive")
-    for name in ("sag", "bend", "damping", "bend_damping", "friction"):
+    for name in ("sag", "bend", "damping", "friction", "ramp_length", "ramp_drop"):
         value = getattr(config, f"elastic_bridge_{name}")
         if not math.isfinite(value) or value < 0:
             raise ValueError(f"elastic_bridge_{name} must be finite and nonnegative")
@@ -433,14 +436,22 @@ def add_elastic_bridge(builder, config):
         raise ValueError("Elastic bridge dimensions must exceed the training edge margins")
     if config.elastic_bridge_approach_width < config.elastic_bridge_width:
         raise ValueError("Approach must be at least as wide as the bridge")
-    if not 0.1 < config.elastic_bridge_spawn_distance < config.elastic_bridge_approach_length - 0.1:
-        raise ValueError("Spawn must leave 10 cm clearance from both approach ends")
+    if config.elastic_bridge_approach_length <= 0.1:
+        raise ValueError("Approach length must exceed the 10 cm outer-end clearance")
+    if config.elastic_bridge_ramp_length >= config.elastic_bridge_length / 2:
+        raise ValueError("End ramps must leave a flexible span between them")
+    distance = config.elastic_bridge_spawn_distance
+    if not (math.isfinite(distance)
+            and -config.elastic_bridge_length < distance < config.elastic_bridge_approach_length - 0.1):
+        raise ValueError("Spawn must lie within the cloth span or inlet platform, clear of the platform outer end")
     provision_pad_contacts(builder)
     newton.solvers.SolverStyle3D.register_custom_attributes(builder)
     hx, hy, height = config.elastic_bridge_length / 2, config.elastic_bridge_width / 2, config.elastic_bridge_height
     nx, ny = config.elastic_bridge_cells_x + 1, config.elastic_bridge_cells_y + 1
     xx, yy = np.meshgrid(np.linspace(-hx, hx, nx), np.linspace(-hy, hy, ny), indexing="ij")
-    zz = height - config.elastic_bridge_sag * (1 - (xx / hx) ** 2)
+    # Interpolate between anchor elevations while retaining sag relative to that baseline.
+    baseline = height + (config.elastic_bridge_exit_height - height) * (xx + hx) / (2 * hx)
+    zz = baseline - config.elastic_bridge_sag * (1 - (xx / hx) ** 2)
     vertices = np.stack((xx, yy, zz), axis=-1).reshape(-1, 3)
     faces = []
     for row in range(nx - 1):
@@ -457,7 +468,7 @@ def add_elastic_bridge(builder, config):
         tri_aniso_ke=wp.vec3(config.elastic_bridge_stretch, config.elastic_bridge_stretch, 0.0),
         edge_aniso_ke=wp.vec3(config.elastic_bridge_bend), 
         tri_kd=config.elastic_bridge_damping,
-        edge_kd=config.elastic_bridge_bend_damping,
+        edge_kd=0.0,
         particle_radius=0.003,
         label="microduck_elastic_bridge",
     )
@@ -467,24 +478,50 @@ def add_elastic_bridge(builder, config):
             index = start + row * ny + col
             builder.particle_flags[index] &= ~int(newton.ParticleFlags.ACTIVE)
             builder.particle_mass[index] = 0.0
+    ramps = []
     for sign in (-1, 1):
-        anchor_half_width = config.elastic_bridge_approach_width / 2 if sign == -1 else hy + 0.07
-        _box(builder, (sign * (hx + 0.04), 0, height - 0.025), (0.04, anchor_half_width, 0.025),
+        anchor_half_width = config.elastic_bridge_approach_width / 2
+        anchor_height = height if sign == -1 else config.elastic_bridge_exit_height
+        _box(builder, (sign * (hx + 0.04), 0, anchor_height - 0.025), (0.04, anchor_half_width, 0.025),
              (0.10, 0.46, 0.53), "elastic_bridge_anchor")
         for side in (-1, 1):
-            _box(builder, (sign * (hx + 0.04), side * (hy + 0.04), (height - 0.05) / 2),
-                 (0.025, 0.025, (height - 0.05) / 2), (0.25, 0.29, 0.31), "elastic_bridge_post")
+            _box(builder, (sign * (hx + 0.04), side * (hy + 0.04), (anchor_height - 0.05) / 2),
+                 (0.025, 0.025, (anchor_height - 0.05) / 2), (0.25, 0.29, 0.31), "elastic_bridge_post")
+        length = config.elastic_bridge_ramp_length
+        if length > 0:
+            # Stay below the reference cloth tangent, including unequal anchor heights.
+            # The cloth can sag onto these supports without pinning extra particle rows.
+            inward_slope = (-sign * (config.elastic_bridge_exit_height - height) - 4 * config.elastic_bridge_sag) / (2 * hx)
+            slope = -sign * (inward_slope - config.elastic_bridge_ramp_drop / length)
+            angle = -math.atan(slope)
+            rotation = wp.quat_from_axis_angle(wp.vec3(0, 1, 0), angle)
+            clearance = 0.003 * math.sqrt(1 + slope * slope)
+            start_point = (sign * hx, 0.0, anchor_height - clearance)
+            end_point = (sign * (hx - length), 0.0, start_point[2] - sign * length * slope)
+            half_thickness = 0.0125
+            normal = wp.quat_rotate(rotation, wp.vec3(0, 0, 1))
+            center = (wp.vec3(*start_point) + wp.vec3(*end_point)) * 0.5 - normal * half_thickness
+            builder.add_shape_box(
+                -1, xform=wp.transform(center, rotation), hx=length * math.sqrt(1 + slope * slope) / 2,
+                hy=hy, hz=half_thickness, color=(0.10, 0.46, 0.53), label="elastic_bridge_ramp",
+            )
+            ramps.append({"start": start_point, "end": end_point, "half_width": hy})
     approach = config.elastic_bridge_approach_length
     # Meet the inlet beam exactly: avoid a step, gap, or overlapping coplanar contact surfaces.
     _box(builder, (-hx - (approach + 0.08) / 2, 0, height / 2),
          ((approach - 0.08) / 2, config.elastic_bridge_approach_width / 2, height / 2),
          (0.58, 0.62, 0.60), "elastic_bridge_approach")
-    # The floor catches falls; no rigid shape extends into the flexible span.
-    _box(builder, (-approach / 2, 0, -0.025),
-         (hx + approach / 2 + 0.35, max(hy, config.elastic_bridge_approach_width / 2) + 0.4, 0.025),
+    # Match the outlet deck to its anchor without a step at the seam.
+    exit_height = config.elastic_bridge_exit_height
+    _box(builder, (hx + (approach + 0.08) / 2, 0, exit_height / 2),
+         ((approach - 0.08) / 2, config.elastic_bridge_approach_width / 2, exit_height / 2),
+         (0.58, 0.62, 0.60), "elastic_bridge_exit")
+    # The floor catches falls; the middle span remains unsupported.
+    _box(builder, (0, 0, -0.025),
+         (hx + approach + 0.35, max(hy, config.elastic_bridge_approach_width / 2) + 0.4, 0.025),
          (0.42, 0.46, 0.43), "elastic_bridge_floor")
     return {"kind": "elastic_bridge", "config": asdict(config), "support": "elastic_strip_fixed_short_ends",
-            "particle_range": [start, start + nx * ny]}
+            "particle_range": [start, start + nx * ny], "ramps": ramps}
 
 
 class SceneTerrain:
@@ -604,19 +641,17 @@ class SceneTerrain:
             spawn[ids, :2] = 0
             config = self.cfg["config"]
             if self.kind == "elastic_bridge":
-                distance = getattr(self, "playback_spawn_distance", None)
-                if distance is not None:
-                    # Playback starts upright on the inlet, including manual resets of recovery policies.
+                if getattr(self, "playback_center_spawn", False):
+                    # Keep playback upright and motionless on reset, including recovery-policy checkpoints.
                     spawn[ids] = self.env.initial_q[ids]
-                    spawn[ids, 0] = -config["elastic_bridge_length"] / 2 - distance
-                    spawn[ids, 1] = 0
+                    spawn[ids, :2] = 0
                     spawn[ids, 3:7] = spawn.new_tensor([0., 0., 0., 1.])
                     self.env.task_logic.spawn_velocity[ids] = 0
-                    self.origins[ids, 2] = config["elastic_bridge_height"]
-                    spawn[ids, 2] += self.origins[ids, 2]
-                    return
-                # Reset restores the authored membrane before sampling its support height.
+                # Negative distances move into the cloth; positive distances move onto the inlet platform.
+                spawn[ids, 0] = -config["elastic_bridge_length"] / 2 - config["elastic_bridge_spawn_distance"]
+                spawn[ids, 1] = 0
                 points = torch.zeros(self.env.num_envs, 1, 3, device=self.env.device)
+                points[:, 0, :2] = spawn[:, :2]
                 self.origins[ids, 2] = self.surface_heights(points)[ids, 0]
             else:
                 self.origins[ids, 2] = 1.15 - config["cloth_sag"]
@@ -671,10 +706,21 @@ class SceneTerrain:
             if self.kind == "elastic_bridge":
                 config = self.cfg["config"]
                 x, y = positions[..., 0], positions[..., 1]
-                inlet = -config["elastic_bridge_length"] / 2
-                on_approach = ((x >= inlet - config["elastic_bridge_approach_length"]) & (x <= inlet)
+                half_length = config["elastic_bridge_length"] / 2
+                # A twisted strip may expose a ramp; keep support queries on the actual upper surface.
+                for ramp in self.cfg.get("ramps", ()):
+                    start, end = ramp["start"], ramp["end"]
+                    fraction = (x - start[0]) / (end[0] - start[0])
+                    on_ramp = (fraction >= 0) & (fraction <= 1) & (y.abs() <= ramp["half_width"])
+                    ramp_height = start[2] + fraction * (end[2] - start[2])
+                    result = torch.where(on_ramp, torch.maximum(result, ramp_height), result)
+                on_approach = ((x.abs() <= half_length + config["elastic_bridge_approach_length"])
+                               & (x.abs() >= half_length)
                                & (y.abs() <= config["elastic_bridge_approach_width"] / 2))
                 result = torch.where(on_approach, config["elastic_bridge_height"], result)
+                on_exit = on_approach & (x >= half_length)
+                exit_height = config.get("elastic_bridge_exit_height", config["elastic_bridge_height"])
+                result = torch.where(on_exit, exit_height, result)
             return result
         result = torch.zeros(points.shape[:2], device=points.device)
         topology = wp.to_torch(self.env.model.tri_indices).long()
@@ -708,7 +754,7 @@ class SceneTerrain:
     def side_out_of_bounds(self, positions):
         """Follow the wider rigid approach and the narrower flexible span without an inlet timeout."""
         config = self.cfg["config"]
-        width = torch.where(positions[:, 0] < -config["elastic_bridge_length"] / 2,
+        width = torch.where(positions[:, 0].abs() >= config["elastic_bridge_length"] / 2,
                             config["elastic_bridge_approach_width"], config["elastic_bridge_width"])
         return positions[:, 1].abs() > width / 2 - 0.04
 
@@ -717,7 +763,8 @@ class SceneTerrain:
             config = self.cfg["config"]
             hx = config["elastic_bridge_length"] / 2
             return ((positions[:, 0] < -hx - config["elastic_bridge_approach_length"] + 0.04)
-                    | (positions[:, 0] > hx - 0.04) | self.side_out_of_bounds(positions))
+                    | (positions[:, 0] > hx + config["elastic_bridge_approach_length"] - 0.04)
+                    | self.side_out_of_bounds(positions))
         if self.kind == "trampoline":
             config = self.cfg["config"]
             radius = min(config["trampoline_length"], config["trampoline_width"]) / 2
@@ -1980,7 +2027,7 @@ def load_policy_checkpoint(path, device, *, allow_recipe_mismatch=False):
     critic_dim = alignment.get("critic_dim")
     if alignment.get("actor_dim") != 61 or type(critic_dim) is not int or critic_dim < 61:
         raise ValueError("Soft-pad playback requires a 61-D actor and a valid task-specific critic_dim")
-    current_fingerprint = recipe_fingerprint()
+    current_fingerprint = recipe_fingerprint(metadata["task"], metadata.get("terrain", {}).get("kind", "default"))
     mismatch = alignment.get("recipe_fingerprint") != current_fingerprint
     if mismatch and not allow_recipe_mismatch:
         raise ValueError("Recipe files differ from the checkpoint; pass --allow-recipe-mismatch for diagnostic playback")
@@ -1998,12 +2045,18 @@ def load_policy_checkpoint(path, device, *, allow_recipe_mismatch=False):
 
         policy_class, normalizer_class = HistoryActorCritic, HistoryNormalization
         extra = HISTORY_SIZE
+    if variant == "cloth_history":
+        from .cloth_policy import ClothHistoryActorCritic, ClothNormalization, layout
+
+        policy_class, normalizer_class = ClothHistoryActorCritic, ClothNormalization
+        current_dim, _, _, size = layout(metadata["history"]["version"])
+        extra = size + current_dim - 61
     actor = policy_class(61 + extra, critic_dim + extra, 14, **policy_cfg).to(device)
     actor.load_state_dict(checkpoint["model_state_dict"], strict=True)
     actor.eval()
     actor.requires_grad_(False)
     if metadata["ppo"]["empirical_normalization"]:
-        normalizer = normalizer_class(61).to(device)
+        normalizer = normalizer_class(current_dim if variant == "cloth_history" else 61).to(device)
         normalizer.load_state_dict(checkpoint["obs_norm_state_dict"], strict=True)
     else:
         normalizer = torch.nn.Identity()
@@ -2037,7 +2090,9 @@ class SoftPadPlayback:
         self.env, self.checkpoint = env, checkpoint
         if env.task != checkpoint.metadata["task"]:
             raise ValueError("Soft-pad environment task must match its checkpoint")
-        configure_policy_observations(env, checkpoint_policy_variant(checkpoint.metadata))
+        configure_policy_observations(
+            env, checkpoint_policy_variant(checkpoint.metadata), checkpoint.metadata.get("history")
+        )
         env.official.common_step_counter = (checkpoint.iteration + 1) * checkpoint.metadata["ppo"].get("num_steps_per_env", 24)
         if env.interactive:
             env.reset()

@@ -106,7 +106,7 @@ def test_recipe_checkpoint_guard(tmp_path):
         "recipe": "official_adapted_v1",
         "task": "groundpick",
         "ppo": {},
-        "official_alignment": {"recipe_fingerprint": recipe_fingerprint()},
+        "official_alignment": {"recipe_fingerprint": recipe_fingerprint("groundpick")},
     }
     path = tmp_path / "config.json"
     path.write_text(json.dumps(metadata))

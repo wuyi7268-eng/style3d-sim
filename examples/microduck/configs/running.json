@@ -1,0 +1,1414 @@
+{
+  "profile": "running_flat_v2",
+  "source": {
+    "model": "https://huggingface.co/HannesVonEssen/microduck-running",
+    "model_revision": "9f45af1f4b04252f3aa1f4c056fa7fa0d4b35e4c",
+    "repository": "https://github.com/Vottivott/microduck-playground",
+    "commit": "828d950134e29a8d04cbb51720a22c8729047fb7",
+    "files_sha256": {
+      "microduck_running_env_cfg.py": "45628d6f60cfe120045aa76a111c11354eb350224e433645131f88e4d7bfbbc3",
+      "microduck_velocity_env_cfg.py": "75a0430b814ac7495eb237ab806fbd4dd10309b9fd3027ac3eee3c2e3c5a944a",
+      "mdp.py": "0c5110e9a71b2999789b2af220f30d371648076c591ccee17bfcda8b02ffe908"
+    },
+    "note": "Released speed recipe plus local automatic robustness schedule; see robustness for phase boundaries."
+  },
+  "source_sha256": "0c5110e9a71b2999789b2af220f30d371648076c591ccee17bfcda8b02ffe908",
+  "spec": {
+    "running_randomization_enabled": false,
+    "running_disturbances_enabled": true,
+    "episode_length_s": 12.0,
+    "actions": {
+      "joint_pos": {
+        "entity_name": "robot",
+        "clip": null,
+        "transmission_type": "joint",
+        "actuator_names": [
+          ".*"
+        ],
+        "scale": 1.0,
+        "offset": 0.0,
+        "preserve_order": false,
+        "use_default_offset": true
+      }
+    },
+    "observations": {
+      "actor": {
+        "terms": {
+          "base_ang_vel": {
+            "func": "mjlab_microduck.tasks.mdp.base_ang_vel_imu_misaligned",
+            "params": {
+              "max_angle_deg": 6.0
+            },
+            "noise": {
+              "operation": "add",
+              "_tensor_cache": {},
+              "n_min": -0.03,
+              "n_max": 0.03
+            },
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 1,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 64,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "projected_gravity": {
+            "func": "mjlab_microduck.tasks.mdp.projected_gravity_imu_misaligned",
+            "params": {
+              "max_angle_deg": 6.0
+            },
+            "noise": {
+              "operation": "add",
+              "_tensor_cache": {},
+              "n_min": -0.01,
+              "n_max": 0.01
+            },
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 1,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 64,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "joint_pos": {
+            "func": "mjlab.envs.mdp.observations.joint_pos_rel",
+            "params": {
+              "asset_cfg": {
+                "name": "robot",
+                "joint_names": [
+                  "^(?!passive_).*"
+                ],
+                "joint_ids": {
+                  "slice": [
+                    null,
+                    null,
+                    null
+                  ]
+                }
+              },
+              "biased": true
+            },
+            "noise": {
+              "operation": "add",
+              "_tensor_cache": {},
+              "n_min": -0.001,
+              "n_max": 0.001
+            },
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "joint_vel": {
+            "func": "mjlab.envs.mdp.observations.joint_vel_rel",
+            "params": {
+              "asset_cfg": {
+                "name": "robot",
+                "joint_names": [
+                  "^(?!passive_).*"
+                ],
+                "joint_ids": {
+                  "slice": [
+                    null,
+                    null,
+                    null
+                  ]
+                }
+              }
+            },
+            "noise": {
+              "operation": "add",
+              "_tensor_cache": {},
+              "n_min": -0.25,
+              "n_max": 0.25
+            },
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 1,
+            "delay_max_lag": 1,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "actions": {
+            "func": "mjlab.envs.mdp.observations.last_action",
+            "params": {},
+            "noise": null,
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "command": {
+            "func": "mjlab.envs.mdp.observations.generated_commands",
+            "params": {
+              "command_name": "twist"
+            },
+            "noise": null,
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "head_command": {
+            "func": "mjlab.envs.mdp.observations.generated_commands",
+            "params": {
+              "command_name": "head_pose"
+            },
+            "noise": null,
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "body_command": {
+            "func": "mjlab.envs.mdp.observations.generated_commands",
+            "params": {
+              "command_name": "body_pose"
+            },
+            "noise": null,
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          }
+        },
+        "concatenate_terms": true,
+        "concatenate_dim": -1,
+        "enable_corruption": true,
+        "history_length": null,
+        "flatten_history_dim": true,
+        "nan_policy": "disabled",
+        "nan_check_per_term": true
+      },
+      "critic": {
+        "terms": {
+          "base_lin_vel": {
+            "func": "mjlab.envs.mdp.observations.base_lin_vel",
+            "params": {},
+            "noise": null,
+            "clip": null,
+            "scale": 1.0,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "base_ang_vel": {
+            "func": "mjlab.envs.mdp.observations.builtin_sensor",
+            "params": {
+              "sensor_name": "robot/imu_ang_vel"
+            },
+            "noise": {
+              "operation": "add",
+              "_tensor_cache": {},
+              "n_min": -0.2,
+              "n_max": 0.2
+            },
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "projected_gravity": {
+            "func": "mjlab.envs.mdp.observations.projected_gravity",
+            "params": {},
+            "noise": {
+              "operation": "add",
+              "_tensor_cache": {},
+              "n_min": -0.05,
+              "n_max": 0.05
+            },
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "joint_pos": {
+            "func": "mjlab.envs.mdp.observations.joint_pos_rel",
+            "params": {
+              "asset_cfg": {
+                "name": "robot",
+                "joint_names": [
+                  "^(?!passive_).*"
+                ],
+                "joint_ids": {
+                  "slice": [
+                    null,
+                    null,
+                    null
+                  ]
+                }
+              },
+              "biased": false
+            },
+            "noise": {
+              "operation": "add",
+              "_tensor_cache": {},
+              "n_min": -0.001,
+              "n_max": 0.001
+            },
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "joint_vel": {
+            "func": "mjlab.envs.mdp.observations.joint_vel_rel",
+            "params": {
+              "asset_cfg": {
+                "name": "robot",
+                "joint_names": [
+                  "^(?!passive_).*"
+                ],
+                "joint_ids": {
+                  "slice": [
+                    null,
+                    null,
+                    null
+                  ]
+                }
+              }
+            },
+            "noise": {
+              "operation": "add",
+              "_tensor_cache": {},
+              "n_min": -0.25,
+              "n_max": 0.25
+            },
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "actions": {
+            "func": "mjlab.envs.mdp.observations.last_action",
+            "params": {},
+            "noise": null,
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "command": {
+            "func": "mjlab.envs.mdp.observations.generated_commands",
+            "params": {
+              "command_name": "twist"
+            },
+            "noise": null,
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "foot_height": {
+            "func": "mjlab_microduck.tasks.mdp.foot_height_safe",
+            "params": {
+              "sensor_name": "foot_height_scan"
+            },
+            "noise": null,
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "foot_air_time": {
+            "func": "mjlab_microduck.tasks.mdp.foot_air_time_safe",
+            "params": {
+              "sensor_name": "feet_ground_contact"
+            },
+            "noise": null,
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "foot_contact": {
+            "func": "mjlab.tasks.velocity.mdp.observations.foot_contact",
+            "params": {
+              "sensor_name": "feet_ground_contact"
+            },
+            "noise": null,
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "foot_contact_forces": {
+            "func": "mjlab_microduck.tasks.mdp.foot_contact_forces_safe",
+            "params": {
+              "sensor_name": "feet_ground_contact"
+            },
+            "noise": null,
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "head_command": {
+            "func": "mjlab.envs.mdp.observations.generated_commands",
+            "params": {
+              "command_name": "head_pose"
+            },
+            "noise": null,
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          },
+          "body_command": {
+            "func": "mjlab.envs.mdp.observations.generated_commands",
+            "params": {
+              "command_name": "body_pose"
+            },
+            "noise": null,
+            "clip": null,
+            "scale": null,
+            "delay_min_lag": 0,
+            "delay_max_lag": 0,
+            "delay_per_env": true,
+            "delay_hold_prob": 0.0,
+            "delay_update_period": 0,
+            "delay_per_env_phase": true,
+            "history_length": 0,
+            "flatten_history_dim": true
+          }
+        },
+        "concatenate_terms": true,
+        "concatenate_dim": -1,
+        "enable_corruption": false,
+        "history_length": null,
+        "flatten_history_dim": true,
+        "nan_policy": "disabled",
+        "nan_check_per_term": true
+      }
+    },
+    "events": {
+      "reset_base": {
+        "func": "mjlab.envs.mdp.events.reset_root_state_uniform",
+        "params": {
+          "pose_range": {
+            "x": [
+              -0.5,
+              0.5
+            ],
+            "y": [
+              -0.5,
+              0.5
+            ],
+            "z": [
+              0.12,
+              0.13
+            ],
+            "yaw": [
+              -3.14,
+              3.14
+            ]
+          },
+          "velocity_range": {}
+        },
+        "mode": "reset",
+        "interval_range_s": null,
+        "is_global_time": false,
+        "min_step_count_between_reset": 0
+      },
+      "reset_robot_joints": {
+        "func": "mjlab.envs.mdp.events.reset_joints_by_offset",
+        "params": {
+          "position_range": [
+            0.0,
+            0.0
+          ],
+          "velocity_range": [
+            0.0,
+            0.0
+          ],
+          "asset_cfg": {
+            "name": "robot",
+            "joint_names": [
+              ".*"
+            ],
+            "joint_ids": {
+              "slice": [
+                null,
+                null,
+                null
+              ]
+            }
+          }
+        },
+        "mode": "reset",
+        "interval_range_s": null,
+        "is_global_time": false,
+        "min_step_count_between_reset": 0
+      },
+      "foot_friction": {
+        "func": "mjlab.envs.mdp.dr.geom.geom_friction",
+        "params": {
+          "asset_cfg": {
+            "name": "robot",
+            "joint_ids": {
+              "slice": [
+                null,
+                null,
+                null
+              ]
+            },
+            "geom_names": [
+              "left_foot_collision",
+              "right_foot_collision"
+            ]
+          },
+          "operation": "abs",
+          "ranges": [
+            0.7,
+            1.3
+          ],
+          "shared_random": true
+        },
+        "mode": "startup",
+        "interval_range_s": null,
+        "is_global_time": false,
+        "min_step_count_between_reset": 0
+      },
+      "encoder_bias": {
+        "func": "mjlab.envs.mdp.dr.joint.encoder_bias",
+        "params": {
+          "asset_cfg": {
+            "name": "robot",
+            "joint_ids": {
+              "slice": [
+                null,
+                null,
+                null
+              ]
+            }
+          },
+          "bias_range": [
+            -0.015,
+            0.015
+          ]
+        },
+        "mode": "startup",
+        "interval_range_s": null,
+        "is_global_time": false,
+        "min_step_count_between_reset": 0
+      },
+      "base_com": {
+        "func": "mjlab.envs.mdp.dr.body.body_com_offset",
+        "params": {
+          "asset_cfg": {
+            "name": "robot",
+            "joint_ids": {
+              "slice": [
+                null,
+                null,
+                null
+              ]
+            }
+          },
+          "operation": "add",
+          "ranges": {
+            "0": [
+              -0.025,
+              0.025
+            ],
+            "1": [
+              -0.025,
+              0.025
+            ],
+            "2": [
+              -0.03,
+              0.03
+            ]
+          }
+        },
+        "mode": "startup",
+        "interval_range_s": null,
+        "is_global_time": false,
+        "min_step_count_between_reset": 0
+      },
+      "expand_bam_friction_fields": {
+        "func": "mjlab_microduck.tasks.mdp.expand_bam_friction_fields",
+        "params": {},
+        "mode": "startup",
+        "interval_range_s": null,
+        "is_global_time": false,
+        "min_step_count_between_reset": 0
+      },
+      "reset_action_history": {
+        "func": "mjlab_microduck.tasks.mdp.reset_action_history",
+        "params": {},
+        "mode": "reset",
+        "interval_range_s": null,
+        "is_global_time": false,
+        "min_step_count_between_reset": 0
+      },
+      "randomize_com": {
+        "func": "mjlab.envs.mdp.dr.body.body_com_offset",
+        "params": {
+          "asset_cfg": {
+            "name": "robot",
+            "joint_ids": {
+              "slice": [
+                null,
+                null,
+                null
+              ]
+            },
+            "body_names": [
+              "trunk_base"
+            ]
+          },
+          "operation": "add",
+          "ranges": [
+            -0.003,
+            0.003
+          ]
+        },
+        "mode": "reset",
+        "interval_range_s": null,
+        "is_global_time": false,
+        "min_step_count_between_reset": 0
+      },
+      "randomize_head_com": {
+        "func": "mjlab.envs.mdp.dr.body.body_com_offset",
+        "params": {
+          "asset_cfg": {
+            "name": "robot",
+            "joint_ids": {
+              "slice": [
+                null,
+                null,
+                null
+              ]
+            },
+            "body_names": [
+              "neck",
+              "neck_pitch",
+              "yaw_roll_motion",
+              "(bottom_head_shell|jaw_soft)",
+              "bearing_roll"
+            ]
+          },
+          "operation": "add",
+          "ranges": [
+            -0.003,
+            0.003
+          ]
+        },
+        "mode": "reset",
+        "interval_range_s": null,
+        "is_global_time": false,
+        "min_step_count_between_reset": 0
+      },
+      "randomize_mass_inertia": {
+        "func": "mjlab.envs.mdp.dr.body.pseudo_inertia",
+        "params": {
+          "asset_cfg": {
+            "name": "robot",
+            "joint_ids": {
+              "slice": [
+                null,
+                null,
+                null
+              ]
+            },
+            "body_names": [
+              "trunk_base"
+            ]
+          },
+          "alpha_range": [
+            -0.02564664719377529,
+            0.024395082084716024
+          ]
+        },
+        "mode": "startup",
+        "interval_range_s": null,
+        "is_global_time": false,
+        "min_step_count_between_reset": 0
+      },
+      "randomize_joint_friction": {
+        "func": "mjlab_microduck.tasks.mdp.randomize_bam_friction",
+        "params": {
+          "asset_cfg": {
+            "name": "robot",
+            "joint_ids": {
+              "slice": [
+                null,
+                null,
+                null
+              ]
+            }
+          },
+          "scale_range": [
+            0.9,
+            1.1
+          ]
+        },
+        "mode": "reset",
+        "interval_range_s": null,
+        "is_global_time": false,
+        "min_step_count_between_reset": 0
+      },
+      "randomize_armature": {
+        "func": "mjlab.envs.mdp.dr.joint.joint_armature",
+        "params": {
+          "asset_cfg": {
+            "name": "robot",
+            "joint_names": [
+              ".*"
+            ],
+            "joint_ids": {
+              "slice": [
+                null,
+                null,
+                null
+              ]
+            }
+          },
+          "operation": "scale",
+          "ranges": [
+            0.9,
+            1.1
+          ]
+        },
+        "mode": "reset",
+        "interval_range_s": null,
+        "is_global_time": false,
+        "min_step_count_between_reset": 0
+      },
+      "push_robot": {
+        "func": "mjlab.envs.mdp.events.push_by_setting_velocity",
+        "mode": "interval",
+        "interval_range_s": [
+          3.0,
+          6.0
+        ],
+        "params": {
+          "velocity_range": {
+            "x": [
+              0.0,
+              0.0
+            ],
+            "y": [
+              0.0,
+              0.0
+            ]
+          }
+        }
+      }
+    },
+    "terminations": {
+      "time_out": {
+        "func": "mjlab.envs.mdp.terminations.time_out",
+        "params": {},
+        "time_out": true
+      },
+      "fell_over": {
+        "func": "mjlab.envs.mdp.terminations.bad_orientation",
+        "params": {
+          "limit_angle": 1.2217304763960306
+        },
+        "time_out": false
+      },
+      "out_of_terrain_bounds": {
+        "func": "mjlab.tasks.velocity.mdp.terminations.out_of_terrain_bounds",
+        "params": {},
+        "time_out": true
+      },
+      "nan_state": {
+        "func": "mjlab_microduck.tasks.mdp.robot_state_is_nan",
+        "params": {
+          "sensor_names": [
+            "feet_ground_contact"
+          ]
+        },
+        "time_out": false
+      }
+    },
+    "rewards": {
+      "track_linear_velocity": {
+        "func": "mjlab.tasks.velocity.mdp.rewards.track_linear_velocity",
+        "params": {
+          "command_name": "twist",
+          "std": 0.3872983346207417
+        },
+        "weight": 2.0
+      },
+      "track_angular_velocity": {
+        "func": "mjlab.tasks.velocity.mdp.rewards.track_angular_velocity",
+        "params": {
+          "command_name": "twist",
+          "std": 0.7071067811865476
+        },
+        "weight": 0.5
+      },
+      "upright": {
+        "func": "mjlab.tasks.velocity.mdp.rewards.upright",
+        "params": {
+          "std": 0.3872983346207417,
+          "asset_cfg": {
+            "name": "robot",
+            "joint_ids": {
+              "slice": [
+                null,
+                null,
+                null
+              ]
+            },
+            "body_names": [
+              "trunk_base"
+            ]
+          }
+        },
+        "weight": 0.75
+      },
+      "pose": {
+        "func": "mjlab.tasks.velocity.mdp.rewards.variable_posture",
+        "params": {
+          "asset_cfg": {
+            "name": "robot",
+            "joint_names": [
+              "^(?!passive_|.*neck.*|.*head.*).*"
+            ],
+            "joint_ids": {
+              "slice": [
+                null,
+                null,
+                null
+              ]
+            }
+          },
+          "command_name": "twist",
+          "std_standing": {
+            ".*hip_yaw.*": 0.1,
+            ".*hip_roll.*": 0.05,
+            ".*hip_pitch.*": 0.15,
+            ".*knee.*": 0.15,
+            ".*ankle.*": 0.1
+          },
+          "std_walking": {
+            ".*hip_yaw.*": 0.3,
+            ".*hip_roll.*": 0.05,
+            ".*hip_pitch.*": 0.4,
+            ".*knee.*": 0.4,
+            ".*ankle.*": 0.25
+          },
+          "std_running": {
+            ".*hip_yaw.*": 0.3,
+            ".*hip_roll.*": 0.05,
+            ".*hip_pitch.*": 0.4,
+            ".*knee.*": 0.4,
+            ".*ankle.*": 0.25
+          },
+          "walking_threshold": 0.01,
+          "running_threshold": 1.5
+        },
+        "weight": 0.15
+      },
+      "body_ang_vel": {
+        "func": "mjlab.tasks.velocity.mdp.rewards.body_angular_velocity_penalty",
+        "params": {
+          "asset_cfg": {
+            "name": "robot",
+            "joint_ids": {
+              "slice": [
+                null,
+                null,
+                null
+              ]
+            },
+            "body_names": [
+              "trunk_base"
+            ]
+          }
+        },
+        "weight": -0.01
+      },
+      "angular_momentum": {
+        "func": "mjlab.tasks.velocity.mdp.rewards.angular_momentum_penalty",
+        "params": {
+          "sensor_name": "robot/root_angmom"
+        },
+        "weight": -0.005
+      },
+      "dof_pos_limits": {
+        "func": "mjlab.envs.mdp.rewards.joint_pos_limits",
+        "params": {},
+        "weight": -1.0
+      },
+      "action_rate_l2": {
+        "func": "mjlab.envs.mdp.rewards.action_rate_l2",
+        "params": {},
+        "weight": -0.02
+      },
+      "air_time": {
+        "func": "mjlab.tasks.velocity.mdp.rewards.feet_air_time",
+        "params": {
+          "sensor_name": "feet_ground_contact",
+          "threshold_min": 0.125,
+          "threshold_max": 0.3,
+          "command_name": "twist",
+          "command_threshold": 0.01
+        },
+        "weight": 0.0
+      },
+      "foot_clearance": {
+        "func": "mjlab.tasks.velocity.mdp.rewards.feet_clearance",
+        "params": {
+          "target_height": 0.015,
+          "height_sensor_name": "foot_height_scan",
+          "command_name": "twist",
+          "command_threshold": 0.01,
+          "asset_cfg": {
+            "name": "robot",
+            "joint_ids": {
+              "slice": [
+                null,
+                null,
+                null
+              ]
+            },
+            "site_names": [
+              "left_foot",
+              "right_foot"
+            ]
+          }
+        },
+        "weight": -2.0
+      },
+      "foot_swing_height": {
+        "func": "mjlab.tasks.velocity.mdp.rewards.feet_swing_height",
+        "params": {
+          "sensor_name": "feet_ground_contact",
+          "height_sensor_name": "foot_height_scan",
+          "target_height": 0.015,
+          "command_name": "twist",
+          "command_threshold": 0.01
+        },
+        "weight": -0.25
+      },
+      "foot_slip": {
+        "func": "mjlab.tasks.velocity.mdp.rewards.feet_slip",
+        "params": {
+          "sensor_name": "feet_ground_contact",
+          "command_name": "twist",
+          "command_threshold": 0.01,
+          "asset_cfg": {
+            "name": "robot",
+            "joint_ids": {
+              "slice": [
+                null,
+                null,
+                null
+              ]
+            },
+            "site_names": [
+              "left_foot",
+              "right_foot"
+            ]
+          }
+        },
+        "weight": -0.05
+      },
+      "self_collisions": {
+        "func": "mjlab.tasks.velocity.mdp.rewards.self_collision_cost",
+        "params": {
+          "sensor_name": "self_collision"
+        },
+        "weight": -1.0
+      },
+      "head_pose_tracking": {
+        "func": "mjlab_microduck.tasks.mdp.head_pose_tracking",
+        "params": {
+          "command_name": "head_pose",
+          "std": 0.5
+        },
+        "weight": 0.0
+      },
+      "body_pose_tracking": {
+        "func": "mjlab_microduck.tasks.mdp.body_pose_tracking_6d",
+        "params": {
+          "command_name": "body_pose",
+          "nominal_height": 0.095,
+          "xy_std": 0.05,
+          "z_std": 0.02,
+          "angle_std": 0.2617993877991494
+        },
+        "weight": 0.0
+      },
+      "head_pose_bias": {
+        "func": "mjlab_microduck.tasks.mdp.head_pose_bias_penalty",
+        "params": {
+          "command_name": "head_pose",
+          "tau_s": 1.0
+        },
+        "weight": 0.0
+      },
+      "forward_progress": {
+        "func": "mjlab_microduck.tasks.mdp.running_forward_progress",
+        "params": {
+          "speed_cap": 2.4
+        },
+        "weight": 5.0
+      },
+      "planar_drift": {
+        "func": "mjlab_microduck.tasks.mdp.running_planar_drift_cost",
+        "params": {
+          "command_name": "twist",
+          "lateral_weight": 4.0
+        },
+        "weight": -0.05
+      },
+      "heading_hold": {
+        "func": "mjlab_microduck.tasks.mdp.heading_hold_reward",
+        "params": {
+          "std": 0.4,
+          "asset_cfg": {
+            "name": "robot",
+            "joint_ids": {
+              "slice": [
+                null,
+                null,
+                null
+              ]
+            }
+          }
+        },
+        "weight": 1.5
+      }
+    },
+    "commands": {
+      "twist": {
+        "resampling_time_range": [
+          12.0,
+          12.0
+        ],
+        "debug_vis": true,
+        "entity_name": "robot",
+        "heading_command": true,
+        "heading_control_stiffness": 0.5,
+        "rel_standing_envs": 0.03,
+        "rel_heading_envs": 0.0,
+        "rel_world_envs": 0.0,
+        "rel_forward_envs": 0.2,
+        "init_velocity_prob": 0.0,
+        "ranges": {
+          "lin_vel_x": [
+            0.2,
+            0.45
+          ],
+          "lin_vel_y": [
+            -0.02,
+            0.02
+          ],
+          "ang_vel_z": [
+            -0.05,
+            0.05
+          ],
+          "heading": [
+            -3.141592653589793,
+            3.141592653589793
+          ]
+        },
+        "viz": {
+          "z_offset": 0.5,
+          "scale": 0.5
+        },
+        "rel_turn_in_place_envs": 0.0,
+        "turn_in_place_min_frac": 0.4,
+        "adapter_command_class": "VelocityCommandCommandOnlyCfg"
+      },
+      "head_pose": {
+        "resampling_time_range": [
+          2.0,
+          5.0
+        ],
+        "debug_vis": false,
+        "ranges": [
+          [
+            -0.05,
+            0.05
+          ],
+          [
+            -0.05,
+            0.05
+          ],
+          [
+            -0.07,
+            0.07
+          ],
+          [
+            -0.015,
+            0.015
+          ]
+        ],
+        "zero_command_prob": 0.0,
+        "adapter_command_class": "UniformPoseCommandCfg"
+      },
+      "body_pose": {
+        "resampling_time_range": [
+          2.0,
+          5.0
+        ],
+        "debug_vis": false,
+        "ranges": [
+          [
+            -0.005,
+            0.005
+          ],
+          [
+            -0.005,
+            0.005
+          ],
+          [
+            -0.005,
+            0.005
+          ],
+          [
+            -0.05,
+            0.05
+          ],
+          [
+            -0.05,
+            0.05
+          ],
+          [
+            -0.05,
+            0.05
+          ]
+        ],
+        "zero_command_prob": 0.0,
+        "adapter_command_class": "UniformPoseCommandCfg"
+      }
+    },
+    "decimation": 4,
+    "curricula": {
+      "action_rate_weight": {
+        "func": "mjlab_microduck.tasks.mdp.reward_weight",
+        "params": {
+          "reward_name": "action_rate_l2",
+          "weight_stages": [
+            {
+              "step": 0,
+              "weight": -0.02
+            },
+            {
+              "step": 60000,
+              "weight": -0.05
+            },
+            {
+              "step": 96000,
+              "weight": -0.1
+            },
+            {
+              "step": 132000,
+              "weight": -0.1
+            }
+          ]
+        }
+      },
+      "running_speed_range": {
+        "func": "mjlab_microduck.tasks.mdp.running_command_ranges_curriculum",
+        "params": {
+          "command_name": "twist",
+          "speed_stages": [
+            {
+              "step": 0,
+              "min_speed": 0.2,
+              "max_speed": 0.45
+            },
+            {
+              "step": 24000,
+              "min_speed": 0.3,
+              "max_speed": 0.55
+            },
+            {
+              "step": 48000,
+              "min_speed": 0.4,
+              "max_speed": 0.65
+            },
+            {
+              "step": 72000,
+              "min_speed": 0.5,
+              "max_speed": 0.75
+            },
+            {
+              "step": 96000,
+              "min_speed": 0.6,
+              "max_speed": 0.85
+            },
+            {
+              "step": 120000,
+              "min_speed": 0.7,
+              "max_speed": 0.95
+            },
+            {
+              "step": 144000,
+              "min_speed": 0.9,
+              "max_speed": 1.2
+            },
+            {
+              "step": 162000,
+              "min_speed": 0.95,
+              "max_speed": 1.35
+            },
+            {
+              "step": 174000,
+              "min_speed": 1.05,
+              "max_speed": 1.5
+            },
+            {
+              "step": 186000,
+              "min_speed": 1.15,
+              "max_speed": 1.65
+            },
+            {
+              "step": 210000,
+              "min_speed": 1.25,
+              "max_speed": 1.8
+            },
+            {
+              "step": 228000,
+              "min_speed": 1.4,
+              "max_speed": 1.95
+            },
+            {
+              "step": 246000,
+              "min_speed": 1.55,
+              "max_speed": 2.1
+            },
+            {
+              "step": 264000,
+              "min_speed": 1.65,
+              "max_speed": 2.2
+            }
+          ]
+        }
+      }
+    },
+    "rl": {
+      "seed": 42,
+      "num_steps_per_env": 24,
+      "max_iterations": 7500,
+      "obs_groups": {
+        "actor": [
+          "actor"
+        ],
+        "critic": [
+          "critic"
+        ]
+      },
+      "save_interval": 250,
+      "experiment_name": "running",
+      "run_name": "running-max-speed",
+      "logger": "wandb",
+      "wandb_project": "mjlab_microduck",
+      "wandb_tags": [],
+      "resume": false,
+      "load_run": ".*",
+      "load_checkpoint": "model_.*.pt",
+      "clip_actions": null,
+      "upload_model": true,
+      "class_name": "OnPolicyRunner",
+      "actor": {
+        "hidden_dims": [
+          512,
+          256,
+          128
+        ],
+        "activation": "elu",
+        "obs_normalization": true,
+        "cnn_cfg": null,
+        "distribution_cfg": {
+          "class_name": "GaussianDistribution",
+          "init_std": 1.0,
+          "std_type": "scalar"
+        },
+        "rnn_type": null,
+        "rnn_hidden_dim": 256,
+        "rnn_num_layers": 1,
+        "class_name": "MLPModel"
+      },
+      "critic": {
+        "hidden_dims": [
+          512,
+          256,
+          128
+        ],
+        "activation": "elu",
+        "obs_normalization": true,
+        "cnn_cfg": null,
+        "distribution_cfg": null,
+        "rnn_type": null,
+        "rnn_hidden_dim": 256,
+        "rnn_num_layers": 1,
+        "class_name": "MLPModel"
+      },
+      "algorithm": {
+        "num_learning_epochs": 5,
+        "num_mini_batches": 4,
+        "learning_rate": 0.001,
+        "schedule": "adaptive",
+        "gamma": 0.99,
+        "lam": 0.95,
+        "entropy_coef": 0.02,
+        "desired_kl": 0.01,
+        "max_grad_norm": 1.0,
+        "value_loss_coef": 1.0,
+        "use_clipped_value_loss": true,
+        "clip_param": 0.2,
+        "normalize_advantage_per_mini_batch": false,
+        "optimizer": "adam",
+        "share_cnn_encoders": false,
+        "class_name": "PPO",
+        "symmetry_cfg": null
+      }
+    },
+    "official_task_id": "Mjlab-Running-Flat-MicroDuck",
+    "robustness": {
+      "start_iteration": 11749,
+      "discovery": {
+        "push_m_s": 0.0,
+        "trunk_com_m": 0.003,
+        "head_com_m": 0.003,
+        "initial_tilt_deg": 0.0
+      },
+      "stages": [
+        {
+          "updates": 100,
+          "push_m_s": 0.03,
+          "trunk_com_m": 0.003,
+          "head_com_m": 0.003,
+          "initial_tilt_deg": 1.0
+        },
+        {
+          "updates": 150,
+          "push_m_s": 0.06,
+          "trunk_com_m": 0.005,
+          "head_com_m": 0.005,
+          "initial_tilt_deg": 1.5
+        },
+        {
+          "updates": 200,
+          "push_m_s": 0.1,
+          "trunk_com_m": 0.008,
+          "head_com_m": 0.006,
+          "initial_tilt_deg": 2.0
+        }
+      ]
+    }
+  }
+}

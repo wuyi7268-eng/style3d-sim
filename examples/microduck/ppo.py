@@ -31,8 +31,12 @@ def create_runner(env, config, log_dir=None, device="cpu", *, training=True):
     """Use the pinned runner unchanged, registering only the optional policy class."""
     from rsl_rl.runners import on_policy_runner
 
+    from .cloth_policy import ClothHistoryActorCritic, ClothNormalization
     from .observations import HISTORY_SIZE
 
+    cloth = config["policy"]["class_name"] == "ClothHistoryActorCritic"
+    if cloth:
+        on_policy_runner.ClothHistoryActorCritic = ClothHistoryActorCritic
     history = config["policy"]["class_name"] == "HistoryActorCritic"
     if history:
         from .policy import HistoryActorCritic, HistoryNormalization
@@ -49,6 +53,9 @@ def create_runner(env, config, log_dir=None, device="cpu", *, training=True):
         env = TeacherObservationEnv(env)
         runner_class = TeacherRunner
     runner = runner_class(env, copy.deepcopy(config), log_dir, device)
+    if cloth and runner.empirical_normalization:
+        runner.obs_normalizer = ClothNormalization(runner.alg.policy.actor_dim).to(device)
+        runner.privileged_obs_normalizer = ClothNormalization(runner.alg.policy.critic_dim, runner.obs_normalizer).to(device)
     if history and runner.empirical_normalization:
         runner.obs_normalizer = HistoryNormalization(61).to(device)
         runner.privileged_obs_normalizer = HistoryNormalization(
@@ -68,7 +75,7 @@ def create_runner(env, config, log_dir=None, device="cpu", *, training=True):
 
 
 def ppo_config(num_envs, policy_variant="standard"):
-    if policy_variant not in ("standard", "history"):
+    if policy_variant not in ("standard", "history", "cloth_history"):
         raise ValueError(f"Unknown policy variant: {policy_variant}")
     return {
         "num_steps_per_env": 24,
@@ -76,7 +83,8 @@ def ppo_config(num_envs, policy_variant="standard"):
         "empirical_normalization": True,
         "logger": "tensorboard",
         "policy": {
-            "class_name": "HistoryActorCritic" if policy_variant == "history" else "ActorCritic",
+            "class_name": {"standard": "ActorCritic", "history": "HistoryActorCritic",
+                           "cloth_history": "ClothHistoryActorCritic"}[policy_variant],
             "init_noise_std": 1.0,
             "noise_std_type": "scalar",
             "actor_hidden_dims": [512, 256, 128],
@@ -131,7 +139,25 @@ def microduck_symmetry(env, obs=None, actions=None, obs_type="policy"):
             indices = list(range(6)) + [start + i for start in (6, 20, 34) for i in perm] + list(range(48, 61))
             signs = [-1, 1, -1, 1, -1, 1] + sign * 3 + [1, -1, -1, 1, 1, -1, -1, 1, -1, 1, -1, 1, -1]
             mirrored = obs[:, indices] * obs.new_tensor(signs)
-            if obs.shape[1] != 61:
+            if obs.shape[1] in (1231, 1294):
+                from .cloth_policy import LENGTH, layout
+
+                actor_dim, _, frame_dim, _ = layout(1 if obs.shape[1] == 1231 else 2)
+                leg_perm = list(range(5, 10)) + list(range(5))
+                version = getattr(env, "cfg", {}).get("history", {}).get("version", 3)
+                # Current magnitudes swap legs without changing sign; old load proxies are signed.
+                feedback_sign = 1 if obs.shape[1] == 1294 and version >= 3 else -1
+                feedback = feedback_sign * obs[:, 61:71][:, leg_perm]
+                past = obs[:, actor_dim:].reshape(-1, LENGTH, frame_dim)
+                proprioception = past[:, :, indices[:48]] * obs.new_tensor(signs[:48])
+                history = torch.cat((proprioception, feedback_sign * past[:, :, 48:58][:, :, leg_perm]), -1)
+                if frame_dim == 61:
+                    # Acceleration is a polar vector; unlike angular velocity, only Y changes sign.
+                    acceleration_signs = obs.new_tensor([1, -1, 1])
+                    feedback = torch.cat((feedback, obs[:, 71:74] * acceleration_signs), -1)
+                    history = torch.cat((history, past[:, :, 58:61] * acceleration_signs), -1)
+                mirrored = torch.cat((mirrored, feedback, history.flatten(1)), -1)
+            elif obs.shape[1] != 61:
                 from .observations import HISTORY_DIM, HISTORY_LENGTH, HISTORY_SIZE
 
                 if obs.shape[1] != 61 + HISTORY_SIZE:

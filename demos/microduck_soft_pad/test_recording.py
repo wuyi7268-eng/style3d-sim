@@ -29,3 +29,14 @@ def test_cloth_edge_uses_saved_dimensions(position, expected):
     ))
     recording.timeline = [{"root_pose": [*position, 1.0]}]
     assert recording.reached_pad_edge() is expected
+
+
+@pytest.mark.parametrize("position,expected", [((-.35, 0), False), ((.4, 0), True), ((0, .15), True)])
+def test_bridge_edge_uses_free_span_dimensions(position, expected):
+    recording = PlaybackRecording.__new__(PlaybackRecording)
+    recording.env = SimpleNamespace(terrain=SimpleNamespace(
+        kind="elastic_bridge", origins=torch.zeros(1, 3),
+        cfg={"config": {"elastic_bridge_length": .8, "elastic_bridge_width": .3}},
+    ))
+    recording.timeline = [{"root_pose": [*position, .7]}]
+    assert recording.reached_pad_edge() is expected

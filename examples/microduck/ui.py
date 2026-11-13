@@ -22,13 +22,13 @@ ASSETS = Path(__file__).with_name("ui_assets")
 def configuration():
     from .env import ENVIRONMENT_CONFIGS
     from .ppo import apply_official_ppo, ppo_config
+    from .task_profiles import load_task_spec
     from .task_registry import TASKS
 
-    snapshot = json.loads((Path(__file__).with_name("configs") / "official_snapshot.json").read_text())
     return {
         "tasks": list(TASKS),
         "profiles": {name: asdict(value) for name, value in ENVIRONMENT_CONFIGS.items()},
-        "ppo": {task: apply_official_ppo(ppo_config(1024), snapshot["tasks"][task], 1024) for task in TASKS},
+        "ppo": {task: apply_official_ppo(ppo_config(1024), load_task_spec(task)[0], 1024) for task in TASKS},
     }
 
 

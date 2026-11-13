@@ -64,7 +64,7 @@ def test_mixed_replay_uses_current_pad_but_can_restore_recorded_environment(tmp_
     metadata = {
         "solver": "synreal", "task": "velocity", "recipe": "official_adapted_v1",
         "observation_contract": "official_asymmetric_pd_v2", "solver_settings": {"linear_iterations": 50},
-        "official_alignment": {"recipe_fingerprint": recipe_fingerprint()}, "ppo": {},
+        "official_alignment": {"recipe_fingerprint": recipe_fingerprint("velocity", "mixed_soft_pad")}, "ppo": {},
         "terrain": {"kind": "mixed_soft_pad", "pad_probability": 0.8,
                     "pad": asdict(replace(PAD_CONFIG, density=120.0))},
     }
@@ -95,7 +95,7 @@ def test_changed_contact_stiffness_requires_explicit_checkpoint_environment(tmp_
         "solver": "synreal", "task": "velocity", "recipe": "official_adapted_v1",
         "observation_contract": "official_asymmetric_pd_v2",
         "physics": asdict(environment_config("mixed_soft_pad").physics),
-        "official_alignment": {"recipe_fingerprint": recipe_fingerprint()}, "ppo": {},
+        "official_alignment": {"recipe_fingerprint": recipe_fingerprint("velocity", "mixed_soft_pad")}, "ppo": {},
         "terrain": {"kind": "mixed_soft_pad", "pad_probability": 0.5, "pad": pad,
                     "soft_contact": {"ke": 50000.0}},
     }

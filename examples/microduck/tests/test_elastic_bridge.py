@@ -95,7 +95,7 @@ def test_bridge_starts_and_resets_without_presimulation(interactive, controller)
         env.close()
 
 
-def test_only_short_ends_are_fixed_and_span_has_no_rigid_support():
+def test_only_short_ends_are_fixed_and_middle_span_has_no_rigid_support():
     builder = newton.ModelBuilder()
     add_scene(builder, "elastic_bridge")
     nx, ny = SCENE_CONFIG.elastic_bridge_cells_x + 1, SCENE_CONFIG.elastic_bridge_cells_y + 1
@@ -106,12 +106,16 @@ def test_only_short_ends_are_fixed_and_span_has_no_rigid_support():
     assert (mass[1:-1] > 0).all()
     assert (mass[[0, -1]] == 0).all()
     points = np.asarray(builder.particle_q).reshape(nx, ny, 3)
-    np.testing.assert_allclose(points[[0, -1], :, 2], SCENE_CONFIG.elastic_bridge_height)
-    np.testing.assert_allclose(points[nx // 2, :, 2], SCENE_CONFIG.elastic_bridge_height - SCENE_CONFIG.elastic_bridge_sag)
-    assert len(builder.shape_body) == 8
+    np.testing.assert_allclose(points[0, :, 2], SCENE_CONFIG.elastic_bridge_height)
+    np.testing.assert_allclose(points[-1, :, 2], SCENE_CONFIG.elastic_bridge_exit_height)
+    mid_height = (SCENE_CONFIG.elastic_bridge_height + SCENE_CONFIG.elastic_bridge_exit_height) / 2
+    np.testing.assert_allclose(points[nx // 2, :, 2], mid_height - SCENE_CONFIG.elastic_bridge_sag)
+    assert len(builder.shape_body) == 11
     for label, transform, scale in zip(builder.shape_label, builder.shape_transform, builder.shape_scale, strict=True):
         if label.endswith("floor"):
             assert transform[2] + scale[2] == pytest.approx(0)
+        elif label == "elastic_bridge_ramp":
+            continue
         else:
             assert abs(transform[0]) - scale[0] >= SCENE_CONFIG.elastic_bridge_length / 2 - 1e-6
     approach = builder.shape_label.index("elastic_bridge_approach")
@@ -121,13 +125,56 @@ def test_only_short_ends_are_fixed_and_span_has_no_rigid_support():
     assert deck_pose[0] + deck_half[0] == pytest.approx(beam_pose[0] - beam_half[0])
     assert deck_pose[2] + deck_half[2] == pytest.approx(beam_pose[2] + beam_half[2])
     assert beam_pose[0] + beam_half[0] == pytest.approx(-SCENE_CONFIG.elastic_bridge_length / 2)
+    exit_index = builder.shape_label.index("elastic_bridge_exit")
+    exit_pose, exit_half = builder.shape_transform[exit_index], builder.shape_scale[exit_index]
+    assert exit_pose[0] == pytest.approx(-deck_pose[0])
+    np.testing.assert_allclose(exit_half[:2], deck_half[:2])
+    assert exit_pose[2] + exit_half[2] == pytest.approx(SCENE_CONFIG.elastic_bridge_exit_height)
+    outlet_anchor = next(i for i, label in enumerate(builder.shape_label)
+                         if label == "elastic_bridge_anchor" and builder.shape_transform[i][0] > 0)
+    assert (builder.shape_transform[outlet_anchor][2] + builder.shape_scale[outlet_anchor][2]
+            == pytest.approx(SCENE_CONFIG.elastic_bridge_exit_height))
+    assert exit_pose[0] - exit_half[0] == pytest.approx(SCENE_CONFIG.elastic_bridge_length / 2 + .08)
+
+
+@pytest.mark.parametrize("exit_height", [.55, .65, .75])
+def test_end_ramps_support_cloth_without_initial_penetration(exit_height):
+    config = replace(SCENE_CONFIG, elastic_bridge_exit_height=exit_height)
+    builder = newton.ModelBuilder()
+    metadata = add_scene(builder, "elastic_bridge", config)
+    points = np.asarray(builder.particle_q)
+    ramps = [i for i, label in enumerate(builder.shape_label) if label == "elastic_bridge_ramp"]
+    assert len(ramps) == 2
+    for index, ramp in zip(ramps, metadata["ramps"], strict=True):
+        pose, half = builder.shape_transform[index], builder.shape_scale[index]
+        corners = np.array([wp.transform_point(pose, wp.vec3(x, y, half[2]))
+                            for x in (-half[0], half[0]) for y in (-half[1], half[1])])
+        expected = np.array([ramp["start"], ramp["end"]])
+        np.testing.assert_allclose(np.sort(corners[:, 0])[::2], np.sort(expected[:, 0]), atol=1e-7)
+        np.testing.assert_allclose(np.sort(corners[:, 2])[::2], np.sort(expected[:, 2]), atol=1e-7)
+        assert abs(ramp["end"][0]) == pytest.approx(config.elastic_bridge_length / 2 - config.elastic_bridge_ramp_length)
+        assert half[1] == pytest.approx(config.elastic_bridge_width / 2)
+        inverse = wp.transform_inverse(pose)
+        local = np.array([wp.transform_point(inverse, wp.vec3(*point)) for point in points])
+        over = (np.abs(local[:, 0]) <= half[0] + 1e-6) & (np.abs(local[:, 1]) <= half[1] + 1e-6)
+        assert over.any()
+        assert (local[over, 2] - half[2]).min() >= .003 - 1e-6
+        assert builder.shape_body[index] == -1
+
+
+def test_end_ramps_can_be_disabled():
+    builder = newton.ModelBuilder()
+    metadata = add_scene(builder, "elastic_bridge", replace(SCENE_CONFIG, elastic_bridge_ramp_length=0))
+    assert not metadata["ramps"]
+    assert "elastic_bridge_ramp" not in builder.shape_label
 
 
 @pytest.mark.parametrize("field,value", [("cells_x", 1), ("cells_y", True), ("width", 0.05), ("density", float("nan")),
-                                         ("damping", -1), ("bend_damping", -1), ("bend_damping", float("nan")),
-                                         ("bend_damping", float("inf")), ("sag", 1.0), ("approach_width", .1),
+                                         ("damping", -1), ("sag", 1.0), ("approach_width", .1),
                                          ("approach_length", .1), ("spawn_distance", .75),
-                                         ("approach_width", float("nan")), ("approach_length", float("inf"))])
+                                         ("approach_width", float("nan")), ("approach_length", float("inf")),
+                                         ("ramp_length", -.01), ("ramp_length", .4), ("ramp_length", float("nan")),
+                                         ("ramp_drop", -.01), ("ramp_drop", float("inf"))])
 def test_invalid_bridge_parameters(field, value):
     with pytest.raises(ValueError):
         add_scene(newton.ModelBuilder(), "elastic_bridge", replace(SCENE_CONFIG, **{f"elastic_bridge_{field}": value}))
@@ -157,7 +204,7 @@ def test_support_and_reset_use_deformed_cloth_without_touching_other_world_or_ro
         wp.to_torch(state.particle_q)[terrain.cloth_indices, 2] -= 0.05
         wp.to_torch(state.particle_qd).fill_(0.2)
     points = torch.tensor([[[0., 0., 0.8], [0., 0.5, 0.8]]] * 2)
-    rest = SCENE_CONFIG.elastic_bridge_height - SCENE_CONFIG.elastic_bridge_sag
+    rest = (SCENE_CONFIG.elastic_bridge_height + SCENE_CONFIG.elastic_bridge_exit_height) / 2 - SCENE_CONFIG.elastic_bridge_sag
     torch.testing.assert_close(terrain.surface_heights(points), torch.tensor([[rest - .05, 0.]] * 2))
     before = [state.particle_q.numpy().copy() for state in env.states]
     terrain.reset(torch.tensor([0]))
@@ -174,12 +221,30 @@ def test_support_and_reset_use_deformed_cloth_without_touching_other_world_or_ro
     heights = terrain.surface_heights(points)
     torch.testing.assert_close(heights[:, :2], torch.full((2, 2), SCENE_CONFIG.elastic_bridge_height))
     assert (heights[:, 2] < SCENE_CONFIG.elastic_bridge_height).all()
+    # The lowered second world's cloth exposes the rigid inlet ramp.
+    ramp = metadata["ramps"][0]
+    fraction = .05 / SCENE_CONFIG.elastic_bridge_ramp_length
+    assert heights[1, 2].item() == pytest.approx(ramp["start"][2] + fraction * (ramp["end"][2] - ramp["start"][2]))
     assert not terrain.out_of_bounds(torch.tensor([[inlet - .001, 0., .8], [inlet + .001, 0., .8]])).any()
     assert terrain.side_out_of_bounds(torch.tensor([[inlet - .2, .25, .8], [inlet + .2, .25, .8]])).tolist() == [False, True]
-    assert terrain.out_of_bounds(torch.tensor([[inlet - .81, 0., .8], [1., 0., .8]])).all()
+    assert terrain.out_of_bounds(torch.tensor([[inlet - .81, 0., .8], [1.3, 0., .8]])).all()
+    points = torch.tensor([[[.8, .2, .8], [.4, 0., .8]]] * 2)
+    torch.testing.assert_close(terrain.surface_heights(points), torch.tensor(
+        [[SCENE_CONFIG.elastic_bridge_exit_height, SCENE_CONFIG.elastic_bridge_exit_height]] * 2))
+    assert not terrain.out_of_bounds(points[:, 0]).any()
+    # Height queries must keep the outlet anchor and deck flush.
+    seam = SCENE_CONFIG.elastic_bridge_length / 2 + .08
+    seam_points = torch.tensor([[[seam - .001, 0., .8], [seam + .001, 0., .8]]] * 2)
+    torch.testing.assert_close(terrain.surface_heights(seam_points), torch.tensor(
+        [[SCENE_CONFIG.elastic_bridge_exit_height, SCENE_CONFIG.elastic_bridge_exit_height]] * 2))
     env.task_logic = SimpleNamespace(spawn=torch.tensor([[0., 0., .125], [0., 0., .125]]))
+    spawn_x = inlet - SCENE_CONFIG.elastic_bridge_spawn_distance
+    spawn_points = torch.tensor([[[spawn_x, 0., 0.]]] * 2)
+    spawn_z = terrain.surface_heights(spawn_points)[0, 0].item() + .125
+    assert inlet < spawn_x < 0
+    assert spawn_z < SCENE_CONFIG.elastic_bridge_height + .125
     terrain.adjust_spawn(torch.tensor([0]))
-    torch.testing.assert_close(env.task_logic.spawn[0], torch.tensor([0., 0., rest + .125]))
+    torch.testing.assert_close(env.task_logic.spawn[0], torch.tensor([spawn_x, 0., spawn_z]))
     torch.testing.assert_close(env.task_logic.spawn[1], torch.tensor([0., 0., .125]))
     assert not terrain.out_of_bounds(env.task_logic.spawn).any()
     reference = model.particle_q.numpy().copy()
@@ -198,7 +263,17 @@ def test_support_and_reset_use_deformed_cloth_without_touching_other_world_or_ro
             np.testing.assert_array_equal(array.numpy()[other], saved[other])
     env.task_logic.spawn[:] = torch.tensor([0., 0., .125])
     terrain.adjust_spawn(torch.tensor([0]))
-    torch.testing.assert_close(env.task_logic.spawn[0], torch.tensor([0., 0., rest + .125]))
+    torch.testing.assert_close(env.task_logic.spawn[0], torch.tensor([spawn_x, 0., spawn_z]))
+
+    # Playback and manual resets query the cloth height at the selected spawn position.
+    terrain.playback_center_spawn = True
+    env.initial_q = torch.tensor([[0., 0., .125, 0., 0., 0., 1.]] * 2)
+    env.task_logic = SimpleNamespace(spawn=env.initial_q.clone(), spawn_velocity=torch.ones(2, 6))
+    env.task_logic.spawn[0, :2] = torch.tensor([-.55, .1])
+    terrain.adjust_spawn(torch.tensor([0]))
+    torch.testing.assert_close(env.task_logic.spawn[0], torch.tensor([spawn_x, 0., spawn_z, 0., 0., 0., 1.]))
+    assert not env.task_logic.spawn_velocity[0].any()
+    assert env.task_logic.spawn_velocity[1].eq(1).all()
 
 
 def test_bridge_recipe_is_isolated_and_resampling_keeps_commands_along_bridge():
@@ -211,23 +286,36 @@ def test_bridge_recipe_is_isolated_and_resampling_keeps_commands_along_bridge():
     try:
         ordinary = deepcopy(env.official.spec)
         env.terrain.kind = "elastic_bridge"
+        env.terrain.cfg = {"config": asdict(SCENE_CONFIG)}
         robot, _, _ = build_robot(task="velocity")
         recipe = OfficialRecipe(env, robot)
+        assert recipe.alignment["recipe_profile"] == "elastic_bridge_velocity_v1"
+        assert recipe.reward_overrides["cloth_contact_slip"].__module__ == "examples.microduck.bridge_rewards"
         assert recipe.velocity_commands is None
+        # The CPU fixture starts with flat-terrain pose randomization; place it on the path first.
+        for state in env.states:
+            env._views(state)[0][:, :2] = 0
+            env._views(state)[0][:, 3:7] = torch.tensor([0., 0., 0., 1.])
+            env.sync_selected_state(state, torch.arange(env.num_envs))
+        recipe.bridge_path.reset(torch.arange(env.num_envs))
         assert recipe.spec["events"]["reset_base"]["params"]["pose_range"]["yaw"] == [-.05, .05]
         for step in (0, 12001, 48001):
             recipe.common_step_counter = step
             recipe.update_commands(torch.arange(env.num_envs))
             assert (env.commands[:, 1:3] == 0).all()
             vx = env.commands[:, 0]
-            assert ((vx == 0) | ((vx >= .05) & (vx <= .20))).all()
+            assert ((vx >= .15) & (vx <= .30)).all()
+        value, terms = recipe.reward(*env._kinematics(), torch.zeros_like(env.actions), torch.zeros_like(env.actions))
+        assert torch.isfinite(value).all()
+        assert {"cloth_velocity", "cloth_contact_slip", "air_time"} <= terms.keys()
         env.terrain.kind = "default"
         restored = OfficialRecipe(env, robot)
         assert restored.spec == ordinary
+        assert restored.reward_overrides == {}
         assert restored.velocity_commands is not None
         exported = {"tasks": {"velocity": {}}}
         preserve_local_terms(exported, {"tasks": {"velocity": ordinary}})
-        assert exported["tasks"]["velocity"]["terrain_overrides"] == ordinary["terrain_overrides"]
+        assert "terrain_overrides" not in exported["tasks"]["velocity"]
     finally:
         env.close()
 
@@ -280,7 +368,7 @@ def test_json_scene_roundtrip_can_resume_but_changed_material_cannot(tmp_path):
         "observation_contract": "official_asymmetric_pd_v2",
         "physics": asdict(environment_config("elastic_bridge").physics),
         "terrain": {"kind": "elastic_bridge", "config": asdict(SCENE_CONFIG)},
-        "official_alignment": {"recipe_fingerprint": recipe_fingerprint()},
+        "official_alignment": {"recipe_fingerprint": recipe_fingerprint("velocity", "elastic_bridge")},
         "ppo": {"policy": {"class_name": "ActorCritic"}},
     }
     path = tmp_path / "config.json"

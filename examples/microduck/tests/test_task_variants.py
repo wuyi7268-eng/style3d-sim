@@ -10,16 +10,16 @@ import torch
 from examples.microduck.env import MicroDuckEnv
 from examples.microduck.policy_spec import JOINT_NAMES, build_robot, joint_coordinates
 from examples.microduck.ppo import apply_official_ppo, microduck_symmetry, ppo_config
-from examples.microduck.task_registry import TASKS, task_key
+from examples.microduck.task_registry import OFFICIAL_TASKS, TASKS, task_key
 
 ROOT = Path(__file__).parents[1]
 
 
 def test_registry_exactly_matches_exported_official_ids():
     tasks = json.loads((ROOT / "configs/official_snapshot.json").read_text())["tasks"]
-    assert len(TASKS) == 33
-    assert set(TASKS) == set(tasks)
-    assert {task_key(t["official_task_id"]) for t in tasks.values()} == set(TASKS)
+    assert len(OFFICIAL_TASKS) == 33
+    assert set(OFFICIAL_TASKS) == set(tasks)
+    assert {task_key(t["official_task_id"]) for t in tasks.values()} == set(OFFICIAL_TASKS)
     assert "spin_backlash" not in TASKS
     assert "rollerstandup_backlash" not in TASKS
 

@@ -24,6 +24,7 @@ def make_recipe(count=4096):
     recipe.step_dt = 0.02
     recipe.observations = recipe.sensors = SimpleNamespace(reset=lambda ids: None)
     recipe.swing_height = None
+    recipe.bridge_path = None
     recipe.command_progress = CommandProgress(count, recipe.device)
     from examples.microduck.velocity_commands import VelocityCommandSampler
 

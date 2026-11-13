@@ -34,7 +34,7 @@ def configure_playback_boundaries(env):
         env.cfg["terrain"]["pad_edge_timeout_margin"] = None
         env.cfg["terrain"]["boundary_curriculum"] = "playback_cross_surface_locomotion"
     elif getattr(env.terrain, "kind", None) == "elastic_bridge":
-        env.terrain.playback_spawn_distance = 0.05
+        env.terrain.playback_center_spawn = True
 
 
 def wait_for_viewer_close(viewer, keep_open):
@@ -65,7 +65,10 @@ def update_velocity_command(env, viewer, command, key_was_down=None, previous_co
 
 def update_playback_observation(env, obs):
     terms = env.official.observations.spec["actor"]["terms"]
-    if not terms["head_command"]["func"].endswith(".zero_command_padding"):
+    if getattr(env, "task", None) == "running":
+        # Match the released running controller's neutral, unused pose commands.
+        env.commands[:, 3:] = 0.0
+    elif not terms["head_command"]["func"].endswith(".zero_command_padding"):
         env.commands[:, 3:7] = torch.tensor(HEAD_UP_COMMAND, device=env.device, dtype=obs.dtype)
     # Unused command slots must remain zero even when a cached observation is refreshed.
     # Their saved normalizer variance is zero; injecting a pose here shifts policy inputs dramatically.
@@ -266,7 +269,7 @@ def main(argv=None):
                          or args.command[0] <= 0 or any(args.command[1:])):
         raise ValueError("--heading-hold requires one Velocity checkpoint with positive forward and zero lateral/yaw command")
     if args.record_dir and (args.policy == "walk" or args.num_envs != 1
-                            or args.terrain not in ("mixed_soft_pad", "cloth")):
+                            or args.terrain not in ("mixed_soft_pad", "cloth", "elastic_bridge")):
         raise ValueError("--record-dir requires a single-environment soft-pad or cloth checkpoint replay")
     if args.record_until_pad_edge and not args.record_dir:
         raise ValueError("--record-until-pad-edge requires --record-dir")
@@ -274,6 +277,13 @@ def main(argv=None):
         return run_walk(args)
     env = create_env(args)
     configure_playback_boundaries(env)
+    if getattr(args, "manual_command", False):
+        # Preserve the platform spawn configured above, but also disable feedback inside env.step/reset.
+        env.official.bridge_path = None
+        print("Manual velocity commands enabled; bridge path feedback disabled.", flush=True)
+    if heading_hold and env.official.bridge_path is not None:
+        env.close()
+        raise ValueError("Bridge path feedback already controls heading; omit --heading-hold")
     # Keep the trained observation layout, delays, and fixed calibration offsets,
     # while removing per-tick random actor noise for deterministic visual replay.
     env.official.observations.spec["actor"]["enable_corruption"] = False
@@ -293,7 +303,10 @@ def main(argv=None):
         # RSL-RL's inference wrapper restores and applies the saved observation normalizer.
         policy = runner.get_inference_policy(device=args.device)
         print("Automatic resets disabled. R: reset all environments, including while paused.", flush=True)
-        if viewer is not None and env.family in ("velocity", "velstand"):
+        if env.official.bridge_path is not None:
+            print("Bridge centerline feedback enabled; stop on the outlet platform. Pose feedback supplies policy commands.",
+                  flush=True)
+        elif viewer is not None and env.family in ("velocity", "velstand"):
             print(
                 "Press I/K: forward/back; J/L: lateral; U/O: turn. Each press adds one increment; release keeps it.", flush=True
             )
@@ -335,7 +348,9 @@ def main(argv=None):
                 start = time.monotonic()
                 if frames == warmup:
                     measured_start = start
-                if env.family in ("velocity", "velstand"):
+                if env.official.bridge_path is not None:
+                    env.official.bridge_path.update()
+                elif env.family in ("velocity", "velstand"):
                     previous_command = update_velocity_command(env, viewer, command, key_was_down, previous_command)
                 if steering is not None:
                     pose = env._views()[2][0].cpu().tolist()

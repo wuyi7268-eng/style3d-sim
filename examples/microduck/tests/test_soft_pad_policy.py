@@ -36,7 +36,7 @@ def saved_policy(tmp_path, request):
         "effort_limit": EFFORT,
         "policy_dt": 0.02,
         "physics_dt": 0.005,
-        "official_alignment": {"actor_dim": 61, "critic_dim": critic_dim, "recipe_fingerprint": recipe_fingerprint()},
+        "official_alignment": {"actor_dim": 61, "critic_dim": critic_dim, "recipe_fingerprint": recipe_fingerprint(task)},
         "ppo": {"policy": {"class_name": "ActorCritic", **cfg}, "empirical_normalization": True},
     }
     (tmp_path / "config.json").write_text(json.dumps(metadata))
@@ -89,7 +89,7 @@ def test_history_checkpoint_loads_independent_actor_critic_encoders(tmp_path, ta
         "effort_limit": EFFORT,
         "policy_dt": 0.02,
         "physics_dt": 0.005,
-        "official_alignment": {"actor_dim": 61, "critic_dim": critic_dim, "recipe_fingerprint": recipe_fingerprint()},
+        "official_alignment": {"actor_dim": 61, "critic_dim": critic_dim, "recipe_fingerprint": recipe_fingerprint(task)},
         "ppo": {"policy": {"class_name": "HistoryActorCritic", **cfg}, "empirical_normalization": True},
     }
     (tmp_path / "config.json").write_text(json.dumps(metadata))
@@ -219,7 +219,8 @@ def test_train_play_and_scene_share_edited_environment_settings(saved_policy, mo
     path, _, _, _ = saved_policy
     cli = ["--solver", "synreal", "--environment-profile", "mixed_soft_pad"]
     training, _, _ = setup("train", cli + ["--init-from", str(path / "model_10.pt")])
-    playback, _, _ = setup("play", cli + ["--checkpoint", str(path / "model_10.pt")])
+    # Changing the terrain profile now changes the scoped recipe identity even with identical observations.
+    playback, _, _ = setup("play", cli + ["--checkpoint", str(path / "model_10.pt"), "--allow-recipe-mismatch"])
     captured = {}
 
     class BeforeConstruction(Exception):

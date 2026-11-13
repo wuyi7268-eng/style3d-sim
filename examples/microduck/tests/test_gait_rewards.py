@@ -182,6 +182,7 @@ def test_velocity_standing_curriculum_samples_idle_commands_without_losing_turns
     recipe.timers = {"twist": torch.zeros(count)}
     # Check the unchanged random-command cohort independently of the local start/stop cohort.
     recipe.velocity_commands = None
+    recipe.bridge_path = None
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(42)
         recipe.update_commands(torch.arange(count))

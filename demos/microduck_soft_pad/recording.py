@@ -56,7 +56,8 @@ class PlaybackRecording:
             parent = int(parents[index])
             path = f"{paths.get(parent, '/World/Ground')}/shape_{index:03d}"
             kind = "robot" if parent >= 0 else "floor"
-            if parent < 0 and "trampoline_" in model.shape_label[index] and "floor" not in model.shape_label[index]:
+            if (parent < 0 and any(name in model.shape_label[index] for name in ("trampoline_", "elastic_bridge_"))
+                    and "floor" not in model.shape_label[index]):
                 kind = "frame"
             if types[index] in (newton.GeoType.MESH, newton.GeoType.CONVEX_MESH):
                 points, faces = np.asarray(source.vertices) * scales[index], source.indices
@@ -89,7 +90,7 @@ class PlaybackRecording:
         triangles = model.tri_indices.numpy()
         if terrain_kind == "trampoline":
             triangles = triangles[np.isin(triangles, env.terrain.cloth_indices.cpu().numpy()).all(axis=1)]
-        elif terrain_kind == "cloth":
+        elif terrain_kind in ("cloth", "elastic_bridge"):
             triangles = np.asarray(env.terrain.surface_triangles[0].detach().cpu().numpy(), dtype=np.int32)
         else:
             pad_particles = np.unique(model.tet_indices.numpy())
@@ -105,6 +106,8 @@ class PlaybackRecording:
                 Path("examples/microduck/env.py"), Path("examples/microduck/scenes.py"), Path(__file__),
                 Path("examples/microduck/heading_control.py"),
                 Path("examples/microduck/jump.py"), Path("examples/microduck/rebound.py"),
+                Path("examples/microduck/cloth_policy.py"), Path("examples/microduck/cloth_current.py"),
+                Path("examples/microduck/cloth_imu.py"), Path("examples/microduck/observations.py"),
             ]
         }
         self.checkpoint_hash = sha256(args.checkpoint)
@@ -144,7 +147,10 @@ class PlaybackRecording:
     def reached_pad_edge(self):
         position = self.timeline[-1]["root_pose"]
         center = self.env.terrain.origins[0, :2].cpu().tolist()
-        if getattr(self.env.terrain, "kind", None) == "cloth":
+        if getattr(self.env.terrain, "kind", None) == "elastic_bridge":
+            config = self.env.terrain.cfg["config"]
+            size = (config["elastic_bridge_length"], config["elastic_bridge_width"])
+        elif getattr(self.env.terrain, "kind", None) == "cloth":
             config = self.env.terrain.cfg["config"]
             size = (config["cloth_length"], config["cloth_width"])
         else:

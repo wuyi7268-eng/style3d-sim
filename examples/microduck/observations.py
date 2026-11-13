@@ -52,13 +52,41 @@ class ObservationHistory:
         return self.frames.flatten(1)
 
 
-def configure_policy_observations(env, variant):
+def configure_policy_observations(env, variant, history_spec=None):
     """Keep base observation dimensions separate from the policy's transport layout."""
+    if variant == "cloth_history":
+        from .cloth_policy import (
+            SPEC,
+            SUPPORTED_SPECS,
+            ClothHistory,
+            layout,
+            supports_cloth_policy,
+        )
+
+        if not supports_cloth_policy(env.task, env.cfg.get("terrain", {}).get("kind", "default")):
+            raise ValueError("cloth_history is restricted to Velocity on cloth, hammock or elastic_bridge")
+        history_spec = SPEC if history_spec is None else history_spec
+        if history_spec not in SUPPORTED_SPECS:
+            raise ValueError("Unsupported cloth history contract")
+        version = history_spec["version"]
+        actor_dim, critic_dim, _, size = layout(version)
+        processor = env.official.observations
+        if processor.critic_dim != 70:
+            raise ValueError("Cloth history requires the base Velocity critic contract")
+        if processor.history is None:
+            processor.history = ClothHistory(env.num_envs, env.device, version)
+        elif not isinstance(processor.history, ClothHistory) or processor.history.version != version:
+            raise ValueError("Cannot switch the history contract of a live environment")
+        env.num_obs, env.num_privileged_obs = actor_dim + size, critic_dim + size
+        env.cfg.update(policy_variant=variant, history=dict(history_spec))
+        return
     if variant not in ("standard", "history"):
         raise ValueError(f"Unknown policy variant: {variant}")
     processor = env.official.observations
     if variant == "history" and processor.history is None:
         processor.history = ObservationHistory(env.num_envs, env.device)
+    elif variant == "history" and not isinstance(processor.history, ObservationHistory):
+        raise ValueError("Cannot switch the history contract of a live environment")
     elif variant == "standard" and processor.history is not None:
         raise ValueError("Cannot switch a live history environment to a standard policy")
     extra = HISTORY_SIZE if variant == "history" else 0
@@ -166,6 +194,12 @@ class OfficialObservations:
     def with_history(self, actor, critic=None):
         if self.history is None:
             return actor, critic
+        if hasattr(self.history, "feedback"):
+            feedback = self.history.feedback
+            if self.history.imu is not None:
+                feedback = torch.cat((feedback, self.history.imu.acceleration), -1)
+            actor = torch.cat((actor, feedback), -1)
+            critic = torch.cat((critic, feedback), -1) if critic is not None else None
         history = self.history.read(actor)
         actor = torch.cat((actor, history), -1)
         critic = torch.cat((critic, history), -1) if critic is not None else None

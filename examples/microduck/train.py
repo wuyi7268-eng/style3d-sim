@@ -56,6 +56,8 @@ def main(argv=None):
 
         cfg = ppo_config(args.num_envs, args.policy_variant)
         cfg = apply_official_ppo(cfg, env.official.spec, args.num_envs)
+        if "rl" in training_config and not args.resume:
+            cfg = apply_official_ppo(cfg, {"rl": training_config["rl"]}, args.num_envs)
         if args.teacher_bc:
             cfg["policy"] = args.teacher_bc["walk"]["policy"].copy()
             cfg["teacher_bc"] = args.teacher_bc
@@ -64,6 +66,8 @@ def main(argv=None):
 
             source_metadata = transfer_metadata(args.init_from, task=args.task)
             cfg["policy"] = source_metadata["ppo"]["policy"].copy()
+            if args.policy_variant == "cloth_history":
+                cfg["policy"]["class_name"] = "ClothHistoryActorCritic"
             cfg["empirical_normalization"] = source_metadata["ppo"]["empirical_normalization"]
         # Resume the exact policy/optimizer configuration recorded with the checkpoint.
         if args.resume:
@@ -76,7 +80,8 @@ def main(argv=None):
                     cfg[key].update(value)
                 else:
                     cfg[key] = value
-        expected_class = "HistoryActorCritic" if args.policy_variant == "history" else "ActorCritic"
+        expected_class = {"standard": "ActorCritic", "history": "HistoryActorCritic",
+                          "cloth_history": "ClothHistoryActorCritic"}[args.policy_variant]
         if cfg["policy"]["class_name"] != expected_class:
             raise ValueError("PPO policy class must match --policy-variant")
         if cfg.get("teacher_bc"):
@@ -113,6 +118,7 @@ def main(argv=None):
             "resume_from": str(args.resume) if args.resume else None,
             "ppo": cfg,
             "observation_contract": env.cfg["observation_contract"],
+            "resolved_task_spec": env.official.spec,
             "deployment_compatible": False,
         }
         # RSL-RL pops class names and injects runtime objects into its configuration.
@@ -133,6 +139,9 @@ def main(argv=None):
             )
             metadata["transfer_from"]["source_recipe_fingerprint"] = source_metadata["official_alignment"]["recipe_fingerprint"]
             print(f"Transfer initialization: {args.init_from}; optimizer reset; both normalizers restored", flush=True)
+            if metadata["transfer_from"]["feedback_reinitialized"]:
+                print("Current feedback: obsolete signed-load input connections reset; other learned features retained.",
+                      flush=True)
         (log_dir / "config.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         if args.resume:
             runner.load(str(args.resume))
@@ -147,7 +156,12 @@ def main(argv=None):
             print(f"Inherited training stage: iteration={runner.current_learning_iteration}, "
                   f"control_steps={env.official.common_step_counter}; current reward/curriculum configuration", flush=True)
         print(f"Training directory: {log_dir.resolve()}", flush=True)
-        runner.learn(args.iterations, init_at_random_ep_len=False)
+        if args.task == "running":
+            from examples.microduck.running_randomization import train_stages
+
+            train_stages(runner, env, args.iterations)
+        else:
+            runner.learn(args.iterations, init_at_random_ep_len=False)
         print(f"Training complete: {log_dir}", flush=True)
     finally:
         env.close()

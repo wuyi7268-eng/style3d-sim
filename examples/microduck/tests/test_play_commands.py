@@ -8,7 +8,11 @@ import pytest
 import torch
 
 from examples.microduck.common import setup
-from examples.microduck.play import manual_reset_requested, update_playback_observation, update_velocity_command
+from examples.microduck.play import (
+    manual_reset_requested,
+    update_playback_observation,
+    update_velocity_command,
+)
 
 
 def test_ballkick_playback_preserves_trained_zero_padding():
@@ -56,7 +60,8 @@ def test_manual_reset_key_is_edge_triggered_and_works_while_paused():
     assert not manual_reset_requested(None, keys)
 
 
-def test_checkpoint_loop_resets_all_worlds_while_paused_and_refreshes_observation(monkeypatch):
+@pytest.mark.parametrize("manual_command", [False, True])
+def test_checkpoint_loop_resets_all_worlds_while_paused_and_refreshes_observation(monkeypatch, manual_command):
     from examples.microduck import play, ppo
 
     # Hold R for two paused frames, release it, then resume. Pausing must not consume the replay budget.
@@ -85,7 +90,7 @@ def test_checkpoint_loop_resets_all_worlds_while_paused_and_refreshes_observatio
         return torch.zeros(3, 14)
 
     env = SimpleNamespace(
-        mixed_terrain=False, official=None, viewer=viewer, family="standup", reset=reset,
+        mixed_terrain=False, terrain=SimpleNamespace(kind="default"), official=None, viewer=viewer, family="standup", reset=reset,
         get_observations=lambda: (observation.clone(), {}), render=lambda: None, close=lambda: None,
         cfg={"policy_dt": 0.02}, graph=None, total_resets=0,
     )
@@ -93,11 +98,16 @@ def test_checkpoint_loop_resets_all_worlds_while_paused_and_refreshes_observatio
     args = SimpleNamespace(
         policy=None, checkpoint="model.pt", device="cpu", num_frames=2, benchmark=True,
         diagnostics=False, command=[0, 0, 0], keep_open=False, record_dir=None, record_until_pad_edge=False,
+        manual_command=manual_command,
     )
     # A checkpoint initializes once; the additional reset must originate from the R key.
     env.official = SimpleNamespace(
-        common_step_counter=0, observations=SimpleNamespace(spec={"actor": {"enable_corruption": True}})
+        common_step_counter=0, bridge_path=None, observations=SimpleNamespace(spec={"actor": {"enable_corruption": True}})
     )
+    if manual_command:
+        # A sentinel would fail if either the reset path or inference loop retained automatic feedback.
+        env.terrain.kind = "elastic_bridge"
+        env.official.bridge_path = SimpleNamespace(config={"spawn_distance_m": .15})
     runner.current_learning_iteration = 0
     monkeypatch.setattr(play, "setup", lambda *_: (args, None, {"num_steps_per_env": 24}))
     monkeypatch.setattr(play, "create_env", lambda args: env)
@@ -106,6 +116,9 @@ def test_checkpoint_loop_resets_all_worlds_while_paused_and_refreshes_observatio
     monkeypatch.setattr(play, "update_playback_observation", lambda *args: None)
     monkeypatch.setattr(play.time, "sleep", lambda seconds: None)
     assert play.main([]) == 0
+    if manual_command:
+        assert env.official.bridge_path is None
+        assert env.terrain.playback_center_spawn
     assert len(resets) == 2
     assert len(inferred) == 2
     assert all(torch.equal(obs, torch.full((3, 61), 2.0)) for obs in inferred)
